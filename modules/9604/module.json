@@ -1,0 +1,121 @@
+{
+  "name": "Iridium_9604",
+  "description": "Iridium 9604 hybrid LTE-M, Iridium SBD and GNSS module, 96-pin LGA",
+  "footprint_description": "Iridium 9604 hybrid LTE-M, Iridium SBD and GNSS module, https://www.groundcontrol.com/wp-content/uploads/2026/07/Iridium-9604-Data-Sheet.pdf, 96-pad LGA, 16.0x26.0mm",
+  "tags": "Iridium 9604 SBD LTE-M GNSS satellite cellular module LGA",
+  "keywords": "Iridium 9604 SBD LTE-M GNSS satellite cellular RF module",
+  "datasheet": "https://www.groundcontrol.com/wp-content/uploads/2026/07/Iridium-9604-Data-Sheet.pdf",
+  "ki_fp_filters": "Iridium*9604*",
+  "uuid_namespace": "3a77decd-60c1-4cc8-935a-f15aa1291342",
+  "reuse": {
+    "footprint": {
+      "upstream": "kicad-ublox-sara-footprint",
+      "body": [16.0, 26.0]
+    },
+    "model": {
+      "upstream": "kicad-ublox-sara-step"
+    }
+  },
+  "footprint": {
+    "expect": {
+      "smd": 96,
+      "npth": 0,
+      "vias": 0
+    }
+  },
+  "symbol": {
+    "gnd": [
+      1, 3, 5, 14, 20, 22, 30, 32, 43, 50, 54, 55, 57, 58, 59, 60, 61, 63, 64, 65, 66, 67, 68, 69,
+      70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
+      93, 94, 95, 96
+    ],
+    "power": {
+      "VCC": {
+        "pins": [51, 52, 53],
+        "top_x": 0.0
+      }
+    },
+    "signals": {
+      "2": ["V_BKCP_GNSS", "input"],
+      "4": ["V_INT", "passive"],
+      "6": ["DSR", "bidirectional"],
+      "7": ["RI", "output"],
+      "8": ["DCD", "output"],
+      "9": ["DTR", "input"],
+      "10": ["RTS", "input"],
+      "11": ["CTS", "output"],
+      "12": ["TXD", "input"],
+      "13": ["RXD", "output"],
+      "15": ["PWR_ON", "input"],
+      "16": ["GPIO1", "bidirectional"],
+      "17": ["VUSB_DET", "input"],
+      "18": ["RESET_N", "input"],
+      "19": ["GPIO6", "bidirectional"],
+      "21": ["ADC", "input"],
+      "23": ["GPIO2", "bidirectional"],
+      "24": ["GPIO3", "bidirectional"],
+      "25": ["GPIO4", "bidirectional"],
+      "26": ["SDA", "bidirectional"],
+      "27": ["SCL", "open_collector"],
+      "28": ["USB_D-", "bidirectional"],
+      "29": ["USB_D+", "bidirectional"],
+      "31": ["ANT_GNSS_SAT", "passive"],
+      "33": ["RTC_GNSS", "input"],
+      "34": ["RFCTRL1", "output"],
+      "35": ["RFCTRL2", "output"],
+      "36": ["TXD_GNSS", "output"],
+      "37": ["GPIO7", "bidirectional"],
+      "38": ["SIM_CLK", "output"],
+      "39": ["SIM_IO", "bidirectional"],
+      "40": ["SIM_RST", "output"],
+      "41": ["VSIM", "output"],
+      "42": ["GPIO5", "bidirectional"],
+      "44": ["SDIO_D2", "bidirectional"],
+      "45": ["SDIO_CLK", "output"],
+      "46": ["SDIO_CMD", "bidirectional"],
+      "47": ["SDIO_D0", "bidirectional"],
+      "48": ["SDIO_D3", "bidirectional"],
+      "49": ["SDIO_D1", "bidirectional"],
+      "56": ["ANT", "passive"],
+      "62": ["ANT_DET", "input"]
+    },
+    "margin_rows": 3,
+    "left_layout": [
+      12, 13, 10, 11, 9, 6, 8, 7,
+      null,
+      15, 18, 4, 17,
+      null,
+      28, 29, 26, 27,
+      null,
+      47, 49, 44, 48, 45, 46
+    ],
+    "right_layout": [
+      31, 56, 62, 34, 35,
+      null,
+      33, 36, 2,
+      null,
+      41, 40, 38, 39,
+      null,
+      16, 23, 24, 25, 42, 19, 37,
+      null,
+      21
+    ],
+    "expect_pins": 96,
+    "expect_pin_entries": 44
+  },
+  "model": {
+    "kind": "step-edit",
+    "stretch": {
+      "select": {
+        "color": [0.372, 0.372, 0.373]
+      },
+      "from_z": 2.0,
+      "by": 0.2
+    },
+    "expect_bbox": {
+      "min": [-8.0, -13.0, 0.0],
+      "max": [8.0, 13.0, 2.4],
+      "tolerance": 0.05
+    }
+  }
+}
