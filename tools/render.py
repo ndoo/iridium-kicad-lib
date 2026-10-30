@@ -24,7 +24,7 @@ import uuid
 
 from PIL import Image, ImageChops
 
-from kicad import LIB, load_module
+from kicad import LIB, board_size, load_module
 
 BOARD_CENTRE = (60.0, 50.0)
 BOARD_MARGIN = 5.0
@@ -75,9 +75,9 @@ BOARD_HEADER = """(kicad_pcb
 def board_text(footprint_path, module):
     """A board with the footprint at BOARD_CENTRE inside a rectangular outline."""
     cx, cy = BOARD_CENTRE
-    # The footprint is turned a quarter, so width and height swap
-    hw = module["pad_data"]["mod_h"] / 2 + BOARD_MARGIN
-    hh = module["pad_data"]["mod_w"] / 2 + BOARD_MARGIN
+    width, height = board_size(module)
+    hw = width / 2 + BOARD_MARGIN
+    hh = height / 2 + BOARD_MARGIN
     outline_uuid = uuid.uuid5(uuid.UUID(module["uuid_namespace"]), "render:outline")
     with open(footprint_path) as f:
         lines = f.read().rstrip("\n").split("\n")

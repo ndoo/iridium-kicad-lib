@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """3D model steps, driven by the "model" section of modules/<name>/module.json.
 
-  can       extract the shielding can from the vendor STEP assembly, moved from
-            the vendor frame into the KiCad 3D frame (a quarter turn about Z
-            followed by the module's vendor.translate)
-  assemble  build the module STEP: XCAF-coloured PCB box, shielding can, a
-            rounded-rectangle label plate, and one face per filled label path.
+  can        extract the shielding can from the vendor STEP assembly, moved from
+             the vendor frame into the KiCad 3D frame (a quarter turn about Z
+             followed by the module's vendor.translate)
+  assemble   build the module STEP: XCAF-coloured PCB box, shielding can, a
+             rounded-rectangle label plate, and one face per filled label path.
+  step-edit  write the STEP named by the module's reuse.model with the straight
+             wall of one coloured part stretched along Z
 
 Usage:
   python tools/model.py can --module modules/9704 --vendor VENDOR.step --out can.step
   python tools/model.py assemble --module modules/9704 --label LABEL.svg --can CAN.step --out OUT.step
+  python tools/model.py step-edit --module modules/9604 [--lib out] --out OUT.step
 """
 
 import argparse
@@ -20,19 +23,23 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
+from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
-    BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_GTransform, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakeSolid, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
+from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.Bnd import Bnd_Box
 from OCP.GProp import GProp_GProps
 from OCP.Geom import Geom_BezierCurve
+from OCP.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
 from OCP.Interface import Interface_Static
 from OCP.Message import Message, Message_Gravity
-from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB, Quantity_TOC_sRGB
 from OCP.STEPCAFControl import STEPCAFControl_Reader, STEPCAFControl_Writer
 from OCP.STEPControl import STEPControl_AsIs, STEPControl_Reader, STEPControl_Writer
 from OCP.TColgp import TColgp_Array1OfPnt
@@ -40,11 +47,14 @@ from OCP.TCollection import TCollection_ExtendedString
 from OCP.TDF import TDF_Label, TDF_LabelSequence
 from OCP.TDataStd import TDataStd_Name
 from OCP.TDocStd import TDocStd_Document
-from OCP.TopAbs import TopAbs_SOLID
+from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
+from OCP.TopoDS import TopoDS
 from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
-from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Dir, gp_GTrsf, gp_Mat, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec, gp_XYZ
+
+from kicad import LIB, load_module, upstream_path
 
 
 # ----------------------------------------------------------------------
@@ -58,11 +68,11 @@ def die(msg):
     sys.exit(f"model: {msg}")
 
 
-def load_model_spec(module_dir):
+def load_model_spec(module_dir, kind="vendor-step+label"):
     with open(os.path.join(module_dir, "module.json")) as f:
         spec = json.load(f).get("model")
-    if spec is None or spec.get("kind") != "vendor-step+label":
-        die(f"{module_dir} has no vendor-step+label model")
+    if spec is None or spec.get("kind") != kind:
+        die(f"{module_dir} has no {kind} model")
     return spec
 
 
@@ -573,6 +583,176 @@ def main_assemble(args):
     print(f"Wrote {args.out}, bbox ({x0:.2f},{y0:.2f},{z0:.2f}) -> ({x1:.2f},{y1:.2f},{z1:.2f})")
 
 
+# ----------------------------------------------------------------------
+# Reused STEP with a stretched part
+# ----------------------------------------------------------------------
+
+COLOR_TOL = 0.005
+Z_TOL = 1e-3
+
+
+def model_source(module, lib):
+    """Path of the STEP named by reuse.model: a fetched upstream file or another module's built STEP."""
+    source = module["reuse"]["model"]
+    if "upstream" in source:
+        return upstream_path(source["upstream"])
+    other = load_module(os.path.join(os.path.dirname(os.path.normpath(module["dir"])), source["module"]))
+    return os.path.join(lib, f"{LIB}.3dshapes", f"{other['name']}.step")
+
+
+def read_colored_faces(path):
+    """Return (faces, solid colour): each face with its Quantity_Color or None."""
+    doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+    reader = STEPCAFControl_Reader()
+    reader.SetColorMode(True)
+    if reader.ReadFile(path) != 1 or not reader.Transfer(doc):
+        die(f"cannot read {path}")
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    roots = TDF_LabelSequence()
+    shape_tool.GetFreeShapes(roots)
+    if roots.Length() != 1:
+        die(f"{path} has {roots.Length()} free shapes, expected 1")
+
+    def color_of(item):
+        color = Quantity_Color()
+        for kind in (XCAFDoc_ColorType.XCAFDoc_ColorSurf, XCAFDoc_ColorType.XCAFDoc_ColorGen):
+            if color_tool.GetColor(item, kind, color):
+                return color
+        return None
+
+    faces = []
+    root = shape_tool.GetShape_s(roots.Value(1))
+    exp = TopExp_Explorer(root, TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face_s(exp.Current())
+        faces.append((face, color_of(face)))
+        exp.Next()
+    return faces, color_of(root)
+
+
+def z_range(shape):
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box)
+    return box.Get()[2], box.Get()[5]
+
+
+def is_straight_wall(face):
+    """True for a plane parallel to Z or a cylinder about a Z-parallel axis."""
+    surface = BRepAdaptor_Surface(face)
+    if surface.GetType() == GeomAbs_Plane:
+        return abs(surface.Plane().Axis().Direction().Z()) < 1e-6
+    if surface.GetType() == GeomAbs_Cylinder:
+        return abs(surface.Cylinder().Axis().Direction().Z()) > 1 - 1e-6
+    return False
+
+
+def stretch_part(faces, stretch):
+    """Lengthen the straight wall of the faces matching stretch.select.color by stretch.by.
+
+    Faces up to stretch.from_z are scaled along Z about the part's lowest face; the radiused
+    faces above it are moved up by stretch.by without scaling, so their radii are unchanged.
+    """
+    want, from_z, by = stretch["select"]["color"], stretch["from_z"], stretch["by"]
+
+    def selected(color):
+        return color is not None and all(
+            abs(a - b) <= COLOR_TOL for a, b in zip(color.Values(Quantity_TOC_sRGB), want))
+
+    part = [i for i, (_, color) in enumerate(faces) if selected(color)]
+    if not part:
+        die(f"no face has the colour {want}")
+    base_z = min(z_range(faces[i][0])[0] for i in part)
+    scale = (from_z + by - base_z) / (from_z - base_z)
+    scale_z = gp_GTrsf()
+    scale_z.SetVectorialPart(gp_Mat(1, 0, 0, 0, 1, 0, 0, 0, scale))
+    scale_z.SetTranslationPart(gp_XYZ(0, 0, base_z * (1 - scale)))
+    lift = gp_Trsf()
+    lift.SetTranslation(gp_Vec(0, 0, by))
+
+    out = list(faces)
+    for i in part:
+        face, color = faces[i]
+        z0, z1 = z_range(face)
+        if z1 <= from_z + Z_TOL:
+            if not is_straight_wall(face):
+                die(f"face {i} below from_z={from_z} is not a straight wall")
+            moved = BRepBuilderAPI_GTransform(face, scale_z, True)
+            moved.Build()
+            out[i] = (TopoDS.Face_s(moved.Shape()), color)
+        elif z0 >= from_z - Z_TOL:
+            out[i] = (TopoDS.Face_s(BRepBuilderAPI_Transform(face, lift, True).Shape()), color)
+        else:
+            die(f"face {i} spans from_z={from_z} (z {z0:.3f} to {z1:.3f}); no straight wall to stretch")
+    print(f"Stretched {len(part)} faces from z={base_z:.3f}, straight wall to z={from_z}, by {by}")
+    return out
+
+
+def sew_solid(faces):
+    """Sew faces into one solid and return it with the old-to-new face mapping."""
+    sewing = BRepBuilderAPI_Sewing(1e-5)
+    for face, _ in faces:
+        sewing.Add(face)
+    sewing.Perform()
+    if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
+        die(f"sewing left {sewing.NbFreeEdges()} free and {sewing.NbMultipleEdges()} multiple edges")
+    shells = []
+    exp = TopExp_Explorer(sewing.SewedShape(), TopAbs_SHELL)
+    while exp.More():
+        shells.append(TopoDS.Shell_s(exp.Current()))
+        exp.Next()
+    if len(shells) != 1:
+        die(f"sewing gave {len(shells)} shells, expected 1")
+    solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(solid, props)
+    if props.Mass() <= 0 or not BRepCheck_Analyzer(solid).IsValid():
+        die("sewn solid is invalid")
+    return solid, [(TopoDS.Face_s(sewing.Modified(face)) if sewing.IsModified(face) else face, color)
+                   for face, color in faces]
+
+
+def main_step_edit(args):
+    module = load_module(args.module)
+    spec = load_model_spec(args.module, "step-edit")
+    source = model_source(module, args.lib)
+    print(f"Reading {source}")
+    faces, solid_color = read_colored_faces(source)
+    solid, faces = sew_solid(stretch_part(faces, spec["stretch"]))
+
+    doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    root = shape_tool.AddShape(solid)
+    if solid_color is not None:
+        color_tool.SetColor(root, solid_color, XCAFDoc_ColorType.XCAFDoc_ColorGen)
+    for face, color in faces:
+        if color is not None:
+            color_tool.SetColor(shape_tool.AddSubShape(root, face), color,
+                                XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+    writer = STEPCAFControl_Writer()
+    writer.SetColorMode(True)
+    writer.SetNameMode(True)
+    Interface_Static.SetCVal_s("write.step.schema", "AP214")
+    writer.Transfer(doc, STEPControl_AsIs)
+    print(f"Writing {args.out}")
+    if writer.Write(args.out) != 1:
+        die(f"cannot write {args.out}")
+
+    check = STEPControl_Reader()
+    check.ReadFile(args.out)
+    check.TransferRoots()
+    box = Bnd_Box()
+    BRepBndLib.Add_s(check.OneShape(), box)
+    got = box.Get()
+    print("Wrote %s, bbox (%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f)" % (args.out, *got))
+    expect = spec["expect_bbox"]
+    want = [*expect["min"], *expect["max"]]
+    if any(abs(a - b) > expect["tolerance"] for a, b in zip(got, want)):
+        die("bbox does not match expect_bbox %s" % want)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -585,11 +765,15 @@ def main():
     p.add_argument("--label", required=True, help="label SVG")
     p.add_argument("--can", required=True, help="shielding can STEP")
     p.add_argument("--out", required=True, help="output STEP")
+    p = sub.add_parser("step-edit", help="write the reused STEP with the stretched part")
+    p.add_argument("--module", required=True, help="module directory, e.g. modules/9604")
+    p.add_argument("--lib", default="out", help="built library directory, for reuse.model.module")
+    p.add_argument("--out", required=True, help="output STEP")
     args = ap.parse_args()
     # The STEP writer prints a statistics banner per transferred shape
     for printer in Message.DefaultMessenger_s().Printers():
         printer.SetTraceLevel(Message_Gravity.Message_Warning)
-    {"can": main_can, "assemble": main_assemble}[args.cmd](args)
+    {"can": main_can, "assemble": main_assemble, "step-edit": main_step_edit}[args.cmd](args)
 
 
 if __name__ == "__main__":

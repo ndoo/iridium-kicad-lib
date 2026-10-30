@@ -4,6 +4,7 @@ Generators for a KiCad symbol, footprint and 3D model library of Iridium satelli
 
 | Module | Description | Package | Section |
 | --- | --- | --- | --- |
+| `Iridium_9604` | Iridium 9604 hybrid LTE-M, Iridium SBD and GNSS module | 96-pad LGA, 16.0 x 26.0 mm | [Iridium 9604](#iridium-9604) |
 | `Iridium_9704` | Iridium Certus 9704 L-band transceiver | 88-pad LGA, 31.5 x 42.0 mm | [Iridium 9704](#iridium-9704) |
 
 This repository contains only original source: the generators, the module definitions and pad data, the build system and CI. It contains no built files and no third-party material. Everything built goes to `out/`, and third-party inputs are downloaded to `third_party/` at build time; both are gitignored. The GitHub Actions workflow builds the library and attaches the zip to a GitHub Release for `v*` tags.
@@ -30,7 +31,7 @@ Earlier releases shipped a library named `Iridium_9704`. To move a design to thi
 
 | Path | Contents |
 | --- | --- |
-| `modules/<name>/` | One directory per module: `module.json` (names, descriptions, symbol pin table and layout, footprint parameters, expected counts, 3D model parameters), `pads.json` (pad geometry), `module.mk` (3D model build rules), and any module-specific code such as a label generator |
+| `modules/<name>/` | One directory per module: `module.json` (names, descriptions, symbol pin table and layout, footprint parameters, expected counts, 3D model parameters, optional `reuse`), `pads.json` (pad geometry, unless reused or derived), `module.mk` (3D model build rules and fetch rules), and any module-specific code such as a label generator |
 | `tools/` | Module-independent code: footprint and symbol generator, 3D model steps, renderer, checks, fetcher |
 | `assets.lock` | Third-party inputs |
 | `third_party/` | Fetched inputs (`fonts/`, `logos/`, `vendor/`); gitignored |
@@ -47,7 +48,7 @@ pip install -r requirements.txt
 make
 ```
 
-`make` builds every module under `modules/`; `make MODULES=9704` builds only the named ones (the symbol library then holds only those). `make footprint symbol` needs no downloads. `make fetch` downloads the inputs; `make step` and `make package` fetch them as needed. `make render` draws each module's footprint, symbol and 3D model with `kicad-cli pcb render`, the same approach as the kicad-render-pcb GitHub Action but on KiCad 10. It needs `kicad-cli` and `rsvg-convert`; `KICAD_CLI` selects the command, and `tools/kicad-cli-docker.sh` runs it from the official KiCad Docker image, as CI does. Other targets: `label`, `can`, `check`, `klc`, `clean` (removes `out/`), `distclean` (also removes `third_party/`). Variables `PYTHON`, `OUT` and `THIRD_PARTY` can be overridden.
+`make` builds every module under `modules/`; `make MODULES=9704` builds only the named ones (the symbol library then holds only those). `make footprint symbol` needs no downloads for a module with its own pad data; a module that reuses an upstream footprint (the 9604) fetches that one file first. `make fetch` downloads all the inputs; `make step` and `make package` fetch them as needed. `make render` draws each module's footprint, symbol and 3D model with `kicad-cli pcb render`, the same approach as the kicad-render-pcb GitHub Action but on KiCad 10. It needs `kicad-cli` and `rsvg-convert`; `KICAD_CLI` selects the command, and `tools/kicad-cli-docker.sh` runs it from the official KiCad Docker image, as CI does. Other targets: `label`, `can`, `check`, `klc`, `clean` (removes `out/`), `distclean` (also removes `third_party/`). Variables `PYTHON`, `OUT` and `THIRD_PARTY` can be overridden.
 
 Output layout:
 
@@ -64,11 +65,12 @@ Footprint UUIDs are derived from fixed keys, so rebuilds of footprints and symbo
 
 ## Adding a module
 
-1. Create `modules/<name>/` and add `module.json` and `pads.json`, following `modules/9704/`. The module's name in `module.json` must be `Iridium_<name>`; it becomes the symbol name and the footprint and STEP file name. Give it its own `uuid_namespace`.
-2. In `module.json`, list the pad geometry file, alignment holes, stitching via pads, the expected pad, via and pin counts, and the symbol's power, ground and signal pins and layout. `make check` and the generators fail if the built counts differ from the expected ones.
-3. For a 3D model, add a `model` section and a `modules/<name>/module.mk` that adds any intermediate targets to `LABELS` and `CANS` and defines the rule for `$(OUT)/$(LIB).3dshapes/Iridium_<name>.step`. `modules/9704/module.mk` shows a model built from a vendor STEP and a generated label.
-4. Add the module to the table above and give it a section below, using the same subheadings as the existing ones.
-5. Add any third-party inputs to `assets.lock`.
+1. Create `modules/<name>/` and add `module.json` and, unless the pads are reused, `pads.json`, following `modules/9704/`. The module's name in `module.json` must be `Iridium_<name>`; it becomes the symbol name and the footprint and STEP file name. Give it its own `uuid_namespace`.
+2. In `module.json`, list the pad geometry file, alignment holes, stitching via pads, the expected pad, via and pin counts, and the symbol's power, ground and signal pins and layout. `make check` and the generators fail if the built counts differ from the expected ones. `symbol.margin_rows` sets the room above and below the pin rows (default 4).
+3. To reuse instead of copy, add a `reuse` section. `"footprint": {"upstream": "<assets.lock entry>", "body": [width, height]}` derives the footprint from a fetched `.kicad_mod`: only its name, description, tags, Value text, 3D model path and ids change, so its pads, graphics and text are the upstream's own, and `body` is its size on the board. `"pads": {"module": "<other module>"}` draws the footprint from another module's pad data. `"model": {"upstream": "<assets.lock entry>"}` or `{"module": "<other module>"}` takes the 3D model. A module has exactly one of `footprint.pads`, `reuse.pads` and `reuse.footprint`.
+4. For a 3D model, add a `model` section and a `modules/<name>/module.mk` that adds any intermediate targets to `LABELS` and `CANS` and defines the rule for `$(OUT)/$(LIB).3dshapes/Iridium_<name>.step`. `modules/9704/module.mk` shows a model built from a vendor STEP and a generated label (kind `vendor-step+label`); `modules/9604/module.mk` shows a reused upstream STEP with an edited part (kind `step-edit`). A module with a fetched footprint also adds the fetch rule and makes its footprint depend on the fetched file.
+5. Add the module to the table above and give it a section below, using the same subheadings as the existing ones.
+6. Add any third-party inputs to `assets.lock`.
 
 ## Testing and CI
 
@@ -92,8 +94,43 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for running the same checks locally.
 | `ce-logo` | 9704 | Wikimedia Commons | CE marking; URL is not revision-pinned, the checksum is the pin |
 | `myriadpro-*` | 9704 | Public GitHub repo pinned to a commit, plus jsDelivr and githack copies of it (Regular also from a second repo) | Adobe commercial font; fetched, never committed or re-hosted |
 | `timesbd` | 9704 | `times32.exe` from the SourceForge corefonts project, plus raw GitHub and CDN copies of the same file | Microsoft core fonts EULA: redistribution of the unmodified original only |
+| `kicad-ublox-sara-footprint` | 9604 | KiCad `kicad-footprints`, `RF_GSM.pretty/ublox_SARA_LGA-96.kicad_mod`, GitLab raw at commit `18227ee1` | CC-BY-SA 4.0 with the KiCad library exception; fetched, never committed; the 9604 footprint is derived from it |
+| `kicad-ublox-sara-step` | 9604 | KiCad `kicad-packages3D`, `RF_GSM.3dshapes/ublox_SARA_LGA-96.step`, GitLab raw at commit `8490a156` | Same licence; the 9604 model changes the height of its shield |
 
 The release zip contains content derived from these inputs; responsibility for distributing it rests with whoever publishes it. `FETCH_UA` sets the download User-Agent, and `FETCH_MIRROR_FIRST=<substring>` tries a matching mirror first. Every mirror must serve bytes matching its recorded sha256; `make verify` checks the fetched files and `python tools/fetch.py --check-mirrors` downloads and checks every mirror.
+
+## Iridium 9604
+
+The Iridium 9604 hybrid LTE-M, Iridium SBD and GNSS module: 96-pad LGA in the u-blox SARA form factor, 16.0 x 26.0 x 2.4 mm. Data sheet (a preliminary fact sheet without a pin table): <https://www.groundcontrol.com/wp-content/uploads/2026/07/Iridium-9604-Data-Sheet.pdf>. Definition: `modules/9604/`.
+
+<table>
+  <tr>
+    <td colspan="6" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-angled.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-angled.png" alt="Angled view of the 3D model" width="800"></a></td>
+  </tr>
+  <tr>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-top.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-top.png" alt="Top view of the 3D model" width="280"></a><br><sub>Top</sub></td>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-bottom.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-bottom.png" alt="Bottom view of the 3D model" width="280"></a><br><sub>Bottom</sub></td>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-rotating.gif"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-rotating.gif" alt="Rotating view of the 3D model" width="280"></a><br><sub>Rotating</sub></td>
+  </tr>
+  <tr>
+    <td colspan="3" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-footprint.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-footprint.png" alt="Footprint" width="400"></a><br><sub><b>Footprint</b></sub></td>
+    <td colspan="3" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9604/render-symbol.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9604/render-symbol.png" alt="Symbol" width="400"></a><br><sub><b>Symbol</b></sub></td>
+  </tr>
+</table>
+
+The images are built from `main` by the workflow and published to GitHub Pages, so they are not committed.
+
+### Footprint
+
+The footprint is derived from the KiCad `ublox_SARA_LGA-96` footprint (`reuse.footprint` in `modules/9604/module.json`; the file is fetched at a pinned commit). `tools/kicad.py` copies it and changes only the footprint name, the description, the tags, the Value text, the 3D model path and the ids, so the 96 pads, the 96 separate paste apertures, the silkscreen, fab and courtyard graphics and the text are the KiCad footprint's own. There are no vias or alignment holes.
+
+### Symbol
+
+All 96 pins come from the module symbol in Iridium's open-source 9604 Launch Pad design (CC BY-SA 4.0, <https://iridium.gitlab.io/9604_launch_pad/>), because the public fact sheet has no pin table: names, numbers and electrical types are typed into `modules/9604/module.json`. `GND` (51 pins) and `VCC` (pins 51 to 53) are native KiCad pin stacks, so the symbol file has 44 pin entries for 96 pins. `V_BKCP_GNSS` is spelled as in the source. The fact sheet gives a satellite transmit current of up to 4.5 A, and the reference design has three `VCC` pins; confirm the supply pins with Iridium, and replace this table if an official one is published.
+
+### 3D model
+
+The model is the KiCad `ublox_SARA_LGA-96` STEP, fetched at a pinned commit (`reuse.model`), with the straight wall of its shield stretched by 0.2 mm so the body is 2.4 mm high as in the fact sheet. The radiused top edge is moved up without scaling, so its radii are unchanged. `tools/model.py step-edit` does this, and the build rule is in `modules/9604/module.mk`.
 
 ## Iridium 9704
 

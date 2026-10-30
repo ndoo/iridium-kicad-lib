@@ -20,18 +20,59 @@ import re
 import uuid as _uuid
 
 LIB = "Iridium_Modules"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_module(path):
-    """Read modules/<name>/module.json and attach its pad data as "pad_data"."""
+    """Read modules/<name>/module.json and attach its pad data as "pad_data".
+
+    The footprint comes from exactly one of footprint.pads (a pad file), reuse.pads (another
+    module's pad data) and reuse.footprint (derived from a fetched upstream footprint, which
+    has no pad data here).
+    """
     with open(os.path.join(path, "module.json")) as f:
         module = json.load(f)
     expected = "Iridium_" + os.path.basename(os.path.normpath(path))
     if module["name"] != expected:
         raise SystemExit(f"{path}: name {module['name']!r} must be {expected!r}")
-    with open(os.path.join(path, module["footprint"]["pads"])) as f:
-        module["pad_data"] = json.load(f)
+    module["dir"] = path
+    reuse = module.get("reuse", {})
+    sources = [name for name, present in (("footprint.pads", "pads" in module["footprint"]),
+                                          ("reuse.pads", "pads" in reuse),
+                                          ("reuse.footprint", "footprint" in reuse)) if present]
+    if len(sources) != 1:
+        raise SystemExit(f"{path}: needs exactly one of footprint.pads, reuse.pads and "
+                         f"reuse.footprint, found {', '.join(sources) or 'none'}")
+    if "pads" in module["footprint"]:
+        with open(os.path.join(path, module["footprint"]["pads"])) as f:
+            module["pad_data"] = json.load(f)
+    elif "pads" in reuse:
+        other = load_module(os.path.join(os.path.dirname(os.path.normpath(path)), reuse["pads"]["module"]))
+        if "pad_data" not in other:
+            raise SystemExit(f"{path}: reuse.pads.module {reuse['pads']['module']!r} has no pad data")
+        module["pad_data"] = other["pad_data"]
     return module
+
+
+def upstream_path(name):
+    """Path of the fetched assets.lock entry `name` under the third_party directory."""
+    with open(os.path.join(ROOT, "assets.lock")) as f:
+        entries = {e["name"]: e for e in json.load(f)["entries"]}
+    if name not in entries:
+        raise SystemExit(f"assets.lock has no entry {name!r}")
+    third_party = os.environ.get("THIRD_PARTY") or os.path.join(ROOT, "third_party")
+    path = os.path.join(third_party, entries[name]["dest"])
+    if not os.path.isfile(path):
+        raise SystemExit(f"{path} is missing; run: python tools/fetch.py {name}")
+    return path
+
+
+def board_size(module):
+    """Width and height of the module's footprint as placed on the board."""
+    if "footprint" in module.get("reuse", {}):
+        return module["reuse"]["footprint"]["body"]
+    # The generator turns its pad data a quarter
+    return module["pad_data"]["mod_h"], module["pad_data"]["mod_w"]
 
 
 def _write(path, content):
@@ -113,6 +154,31 @@ def _fp_sort(lines):
                   key=_fp_sort_key)
     tail = [b for b in blocks if b not in head and b not in body]
     return [lines[0]] + [l for b in head + body + tail for l in b] + [lines[-1]]
+
+
+def derive_footprint(module):
+    """Return the upstream footprint named by reuse.footprint, renamed for this module.
+
+    The name, description, tags, Value text, 3D model path and ids change; the rest is copied.
+    """
+    with open(upstream_path(module["reuse"]["footprint"]["upstream"])) as f:
+        text = f.read()
+    name = module["name"]
+    model = f"${{IRIDIUM_MODULES_3DMODEL_DIR}}/{LIB}.3dshapes/{name}.step"
+
+    def replace_once(pattern, repl):
+        nonlocal text
+        text, count = re.subn(pattern, repl, text, count=1)
+        if count != 1:
+            raise SystemExit(f"upstream footprint has no match for {pattern!r}")
+
+    replace_once(r'(?m)^\(footprint "[^"]*"', lambda m: f'(footprint "{name}"')
+    replace_once(r'(?m)^\t\(descr "[^"]*"\)', lambda m: f'\t(descr "{module["footprint_description"]}")')
+    replace_once(r'(?m)^\t\(tags "[^"]*"\)', lambda m: f'\t(tags "{module["tags"]}")')
+    replace_once(r'\(property "Value" "[^"]*"', lambda m: f'(property "Value" "{name}"')
+    replace_once(r'\(model "[^"]*"', lambda m: f'(model "{model}"')
+    _u = _make_u(_uuid.UUID(module["uuid_namespace"]))
+    return re.sub(r'\(uuid "[^"]+"\)', lambda m: f'(uuid "{_u()}")', text)
 
 
 def rot(x, y):
@@ -500,13 +566,13 @@ RIGHT_X = BODY_RIGHT + PIN_LENGTH
 class _Geometry:
     """Symbol outline and pin row positions, derived from the module's layouts."""
 
-    def __init__(self, left_layout, right_layout):
+    def __init__(self, left_layout, right_layout, margin_rows):
         n_rows = len(left_layout)
         # Left rows are centred on y = 0, topmost first
         self.left_y = [(n_rows - 1) / 2.0 * SPACING - i * SPACING for i in range(n_rows)]
         # Room above and below for the power pin names
-        self.body_top = self.left_y[0] + 4 * SPACING
-        self.body_bottom = self.left_y[-1] - 4 * SPACING
+        self.body_top = self.left_y[0] + margin_rows * SPACING
+        self.body_bottom = self.left_y[-1] - margin_rows * SPACING
         # Right rows are top-aligned with the left side
         self.right_y = [self.left_y[0] - i * SPACING for i in range(len(right_layout))]
         self.top_y = self.body_top + SPACING
@@ -603,7 +669,7 @@ def _symbol_block(module):
     """Return the s-expression text of one symbol, without a trailing newline."""
     name = module["name"]
     sym = module["symbol"]
-    g = _Geometry(sym["left_layout"], sym["right_layout"])
+    g = _Geometry(sym["left_layout"], sym["right_layout"], sym.get("margin_rows", 4))
     signals = {int(p): v for p, v in sym["signals"].items()}
     parts = []
 
@@ -669,7 +735,7 @@ def _symbol_block(module):
     nc_cols = 6
     nc_x0 = BODY_LEFT + 2.54
     nc_y0 = g.body_top - 2.54
-    for idx, p in enumerate(sym["nc"]):
+    for idx, p in enumerate(sym.get("nc", [])):
         col = idx % nc_cols
         row = idx // nc_cols
         nx = nc_x0 + col * 2.54
@@ -702,13 +768,14 @@ def generate_symbols(modules):
 
 def main_footprint(module_path, out_path):
     module = load_module(module_path)
-    content = generate_footprint(module)
+    derived = "footprint" in module.get("reuse", {})
+    content = derive_footprint(module) if derived else generate_footprint(module)
     _write(out_path, content)
     print(f"Footprint written to {out_path}")
 
     expect = module["footprint"]["expect"]
     counts = {
-        "smd": content.count("smd rect") + content.count("smd roundrect"),
+        "smd": len(re.findall(r'\(pad "[0-9]+" smd', content)),
         "npth": content.count("np_thru_hole"),
         "vias": content.count("thru_hole circle"),
     }
