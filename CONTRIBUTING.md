@@ -43,4 +43,6 @@ Branch from `main`. Pull requests are squash-merged, so the title follows Conven
 
 ## Releases
 
-Pushing a `v*` tag builds the library zip and attaches it and the renders to a GitHub Release.
+Pushing a `v*` tag builds the library zip and attaches it and the renders to a GitHub Release. The workflow does not write the release body, so set the notes once the run has finished, with `gh release edit <tag> --notes-file <file>`.
+
+Every release needs notes; do not leave the body empty. Write them for people who use the library: what was added, any breaking change with the steps to migrate, what changed in existing footprints, symbols and models (and whether a placed footprint has to be re-created), and known issues. Then check that the zip and the render files are attached.

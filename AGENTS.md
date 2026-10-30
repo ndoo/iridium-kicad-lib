@@ -21,6 +21,12 @@ Read [README.md](README.md) and [CONTRIBUTING.md](CONTRIBUTING.md) first and fol
 - Do not hard-wrap pull request or issue body text; write each paragraph as one line.
 - Do not post comments or reviews to GitHub or any other external service without showing the draft to the user and getting approval.
 
+## Releases
+
+- Every release gets written notes in its body, as described under Releases in CONTRIBUTING.md. Do not leave the body empty.
+- Show the draft notes to the user and get approval before setting them.
+- After the tag's workflow finishes, check that the zip and the render files are attached.
+
 ## Style
 
 - Comment only a non-obvious reason or a caveat. Do not describe what the code does. Keep each comment to one line, and put longer rationale and references in the commit message.

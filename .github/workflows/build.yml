@@ -96,6 +96,12 @@ jobs:
         with:
           name: Iridium_Modules-renders
           path: render
+      - name: Prefix renders with the module name
+        run: |
+          for f in render/*/*; do
+            mv "$f" "render/$(basename "$(dirname "$f")")-$(basename "$f")"
+          done
+          rmdir render/*/
       - uses: softprops/action-gh-release@v2
         with:
           files: |
