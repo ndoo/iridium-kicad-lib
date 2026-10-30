@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Generate the KiCad footprint and symbol for the Iridium 9704 module.
+"""Generate the KiCad footprints and symbols for the Iridium modules.
 
-  footprint  .kicad_mod from tools/pad_data.json, following the
-             Astrocast_AST50147-00 footprint conventions
-  symbol     .kicad_sym, following the AST50147-xx KLC pattern from the
-             kicad-symbols library
+Each module lives in modules/<name>/ (module.json plus its pad file).
+
+  footprint  .kicad_mod for one module, following the Astrocast_AST50147-00
+             footprint conventions
+  symbol     one .kicad_sym holding a symbol per module, following the
+             AST50147-xx KLC pattern from the kicad-symbols library
 
 Usage:
-  python tools/kicad.py footprint --out Iridium_9704.pretty/Iridium_9704.kicad_mod
-  python tools/kicad.py symbol --out Iridium_9704.kicad_sym
+  python tools/kicad.py footprint --module modules/9704 --out Iridium_Modules.pretty/Iridium_9704.kicad_mod
+  python tools/kicad.py symbol --module modules/9704 [--module ...] --out Iridium_Modules.kicad_sym
 """
 
 import argparse
@@ -17,7 +19,19 @@ import os
 import re
 import uuid as _uuid
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+LIB = "Iridium_Modules"
+
+
+def load_module(path):
+    """Read modules/<name>/module.json and attach its pad data as "pad_data"."""
+    with open(os.path.join(path, "module.json")) as f:
+        module = json.load(f)
+    expected = "Iridium_" + os.path.basename(os.path.normpath(path))
+    if module["name"] != expected:
+        raise SystemExit(f"{path}: name {module['name']!r} must be {expected!r}")
+    with open(os.path.join(path, module["footprint"]["pads"])) as f:
+        module["pad_data"] = json.load(f)
+    return module
 
 
 def _write(path, content):
@@ -30,10 +44,7 @@ def _write(path, content):
 # Footprint
 # ---------------------------------------------------------------------------
 
-_NS = _uuid.UUID("6f1c2a52-9704-4c3e-b5a1-3d1a0e7c9704")
-
-
-def _make_u():
+def _make_u(namespace):
     """Return a UUID generator; ids are uuid5(namespace, key) so output is reproducible."""
     n = [0]
 
@@ -41,7 +52,7 @@ def _make_u():
         if key is None:
             n[0] += 1
             key = f"item:{n[0]}"
-        return str(_uuid.uuid5(_NS, key))
+        return str(_uuid.uuid5(namespace, key))
     return _u
 
 
@@ -109,8 +120,11 @@ def rot(x, y):
     return -y, x
 
 
-def generate_footprint(pin_data):
+def generate_footprint(module):
     """Build the complete .kicad_mod content string."""
+    name = module["name"]
+    pin_data = module["pad_data"]
+    fp = module["footprint"]
 
     # KLC-driven parameters
 
@@ -175,7 +189,7 @@ def generate_footprint(pin_data):
     half_h = pin_data["mod_h"] / 2
 
     out = []
-    _u = _make_u()
+    _u = _make_u(_uuid.UUID(module["uuid_namespace"]))
 
     def w(line, indent=0):
         out.append("\t" * indent + line)
@@ -183,14 +197,13 @@ def generate_footprint(pin_data):
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
-    w('(footprint "Iridium_9704"')
+    w(f'(footprint "{name}"')
     w('(version 20260206)', 1)
     w('(generator "pcbnew")', 1)
     w('(generator_version "10.0")', 1)
     w('(layer "F.Cu")', 1)
-    w('(descr "Iridium Certus 9704 L-band satellite transceiver, https://www.iridium.com/products/iridium-certus-9704/, '
-      '88-pad LGA, 31.5x42.0mm")', 1)
-    w('(tags "Iridium 9704 Certus satellite transceiver LGA")', 1)
+    w(f'(descr "{module["footprint_description"]}")', 1)
+    w(f'(tags "{module["tags"]}")', 1)
 
     # ------------------------------------------------------------------
     # Properties (each with unlocked + uuid)
@@ -218,7 +231,7 @@ def generate_footprint(pin_data):
     _prop("Reference", "REF**",          0, -text_y, "F.SilkS")
 
     # KLC F5.2.3: Component value (footprint name) must be displayed on the F.Fab layer
-    _prop("Value",     "Iridium_9704",   0,  text_y, "F.Fab")
+    _prop("Value",     name,             0,  text_y, "F.Fab")
 
     _prop("Datasheet", "",               0,   0.0, "F.Fab", hide=True,
           font_sz=(1.27, 1.27))
@@ -367,7 +380,7 @@ def generate_footprint(pin_data):
     w(')', 1)
 
     # ------------------------------------------------------------------
-    # Copper pads (88 total)
+    # Copper pads
     # ------------------------------------------------------------------
     for pad in pads_raw:
         pin  = pad["pin"]
@@ -403,12 +416,8 @@ def generate_footprint(pin_data):
     # Module mechanical hole references on Dwgs.User
     # (module has alignment holes but PCB does not need NPTH drills)
     # ------------------------------------------------------------------
-    hole_positions = [
-        (-13.250, -10.000),
-        ( 13.250,   6.000),
-    ]
-    for hx, hy in (rot(*h) for h in hole_positions):
-        r = 0.8
+    for hx, hy in (rot(*h) for h in fp["alignment_holes"]):
+        r = fp["alignment_hole_radius"]
         w('(fp_circle', 1)
         w(f'(center {_n(hx)} {_n(hy)})', 2)
         w(f'(end {_n(hx + r)} {_n(hy)})', 2)
@@ -424,10 +433,9 @@ def generate_footprint(pin_data):
     # ------------------------------------------------------------------
     # Ground stitching vias (2 per pad, +/-0.5 mm along long axis)
     # ------------------------------------------------------------------
-    VIA_PINS = {2, 4, 61, 62, 63, 45, 47, 78, 79, 80}
     pad_by_pin = {p["pin"]: p for p in pads_raw}
 
-    for vp in sorted(VIA_PINS):
+    for vp in sorted(fp["via_pins"]):
         pad = pad_by_pin[vp]
         vx0 = pad["cx"]
         vy0 = -pad["cy"]
@@ -455,7 +463,7 @@ def generate_footprint(pin_data):
     # 3D model + footer
     # ------------------------------------------------------------------
     w('(embedded_fonts no)', 1)
-    w('(model "${IRIDIUM_9704_3DMODEL_DIR}/Iridium_9704.3dshapes/Iridium_9704.step"', 1)
+    w(f'(model "${{IRIDIUM_MODULES_3DMODEL_DIR}}/{LIB}.3dshapes/{name}.step"', 1)
     w('(offset', 2)
     w('(xyz 0 0 0)', 3)
     w(')', 2)
@@ -475,103 +483,34 @@ def generate_footprint(pin_data):
 # ---------------------------------------------------------------------------
 # Symbol
 # ---------------------------------------------------------------------------
-# Pin assignments
-# ---------------------------------------------------------------------------
-GND_PINS = [1, 2, 4, 8, 11, 14, 17, 18, 22, 25, 31, 32, 45, 47, 48,
-            60, 61, 62, 63, 64, 65, 66, 75, 76, 77, 78, 79, 80]
-
-NC_PINS = [28, 29, 30, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
-           67, 68, 69, 70, 71, 72, 73, 74, 81, 82, 83, 84, 85, 86, 87, 88]
-
-V_BAT_MAIN_PINS = [34, 35, 36]
-V_BAT_PA_PINS   = list(range(37, 45))
-
-# Signal pins: pin_number -> (name, electrical_type)
-SIGNAL_PINS = {
-    3:  ("GNSS_RF_OUT",   "passive"),
-    5:  ("GNSS_RF_EN",    "input"),
-    6:  ("ENABLE",        "input"),
-    7:  ("BOOTED",        "output"),
-    9:  ("UART_XCVR_TX",  "output"),
-    10: ("UART_XCVR_RX",  "input"),
-    12: ("WAKE_XCVR_OUT", "output"),
-    13: ("WAKE_XCVR_IN",  "input"),
-    15: ("XMIT_GATE",     "output"),
-    16: ("SYNC_XCVR_OUT", "output"),
-    19: ("SPI_COPI",      "input"),
-    20: ("SPI_CIPO",      "output"),
-    21: ("SPI_SCLK",      "input"),
-    23: ("SPI_CS0",       "input"),
-    24: ("SPI_CS1",       "input"),
-    26: ("RSVD_0",        "bidirectional"),
-    27: ("RSVD_1",        "bidirectional"),
-    46: ("XCVR_RF",       "passive"),
-}
-
-# ---------------------------------------------------------------------------
-# Left-side layout (top to bottom).  None = visual gap (empty row).
-# ---------------------------------------------------------------------------
-LEFT_LAYOUT = [
-    9,    # UART_XCVR_TX
-    10,   # UART_XCVR_RX
-    None, # ---- gap ----
-    19,   # SPI_COPI
-    20,   # SPI_CIPO
-    21,   # SPI_SCLK
-    23,   # SPI_CS0
-    24,   # SPI_CS1
-    None, # ---- gap ----
-    6,    # ENABLE
-    7,    # BOOTED
-    13,   # WAKE_XCVR_IN
-    12,   # WAKE_XCVR_OUT
-    15,   # XMIT_GATE
-    16,   # SYNC_XCVR_OUT
-    5,    # GNSS_RF_EN
-    None, # ---- gap ----
-    26,   # RSVD_0
-    27,   # RSVD_1
-]
-
-# Right-side layout (top to bottom)
-RIGHT_LAYOUT = [
-    46,   # XCVR_RF
-    None, # ---- gap ----
-    3,    # GNSS_RF_OUT
-]
-
-# ---------------------------------------------------------------------------
 # Geometry constants (all in mm, KiCad symbol coords: +Y up)
 # ---------------------------------------------------------------------------
 SPACING    = 2.54
 PIN_LENGTH = 2.54
 FONT_SIZE  = 1.27
 
-N_LEFT_ROWS = len(LEFT_LAYOUT)  # 19
-
-# Y positions for left-side rows, centered around y = 0
-# Row 0 (topmost) at y = +22.86, row 18 (bottommost) at y = -22.86
-LEFT_Y = [(N_LEFT_ROWS - 1) / 2.0 * SPACING - i * SPACING for i in range(N_LEFT_ROWS)]
-
-# Body rectangle
 BODY_LEFT   = -15.24
 BODY_RIGHT  =  15.24
-BODY_TOP    = LEFT_Y[0]  + 4 * SPACING   # 22.86 + 10.16 = 33.02 (room for top pin names)
-BODY_BOTTOM = LEFT_Y[-1] - 4 * SPACING   # -22.86 - 10.16 = -33.02
 
 # Left / right pin stub X
-LEFT_X  = BODY_LEFT  - PIN_LENGTH   # -15.24
-RIGHT_X = BODY_RIGHT + PIN_LENGTH   #  15.24
+LEFT_X  = BODY_LEFT  - PIN_LENGTH
+RIGHT_X = BODY_RIGHT + PIN_LENGTH
 
-# Right-side Y positions (top-aligned with left side)
-RIGHT_Y = [LEFT_Y[0] - i * SPACING for i in range(len(RIGHT_LAYOUT))]
 
-# Top power pins (pointing down into the body)
-TOP_Y = BODY_TOP + SPACING           # 27.94
-TOP_X = {33: -7.62, 34: 0.0, 37: 7.62}  # V_IO, V_BAT_MAIN, V_BAT_PA (7.62mm spacing)
+class _Geometry:
+    """Symbol outline and pin row positions, derived from the module's layouts."""
 
-# Bottom GND pin (pointing up into the body)
-BOTTOM_Y = BODY_BOTTOM - SPACING     # -27.94
+    def __init__(self, left_layout, right_layout):
+        n_rows = len(left_layout)
+        # Left rows are centred on y = 0, topmost first
+        self.left_y = [(n_rows - 1) / 2.0 * SPACING - i * SPACING for i in range(n_rows)]
+        # Room above and below for the power pin names
+        self.body_top = self.left_y[0] + 4 * SPACING
+        self.body_bottom = self.left_y[-1] - 4 * SPACING
+        # Right rows are top-aligned with the left side
+        self.right_y = [self.left_y[0] - i * SPACING for i in range(len(right_layout))]
+        self.top_y = self.body_top + SPACING
+        self.bottom_y = self.body_bottom - SPACING
 
 
 # ---------------------------------------------------------------------------
@@ -660,20 +599,16 @@ def _property(name, value, x, y, hidden=False):
 # ---------------------------------------------------------------------------
 # Main generator
 # ---------------------------------------------------------------------------
-def generate_symbol():
+def _symbol_block(module):
+    """Return the s-expression text of one symbol, without a trailing newline."""
+    name = module["name"]
+    sym = module["symbol"]
+    g = _Geometry(sym["left_layout"], sym["right_layout"])
+    signals = {int(p): v for p, v in sym["signals"].items()}
     parts = []
 
-    # --- file header ---
     parts.append(
-        "(kicad_symbol_lib\n"
-        "\t(version 20251024)\n"
-        "\t(generator \"kicad_symbol_editor\")\n"
-        "\t(generator_version \"10.0\")"
-    )
-
-    # --- symbol block ---
-    parts.append(
-        "\t(symbol \"Iridium_9704\"\n"
+        f"\t(symbol \"{name}\"\n"
         "\t\t(exclude_from_sim no)\n"
         "\t\t(in_bom yes)\n"
         "\t\t(on_board yes)\n"
@@ -681,26 +616,21 @@ def generate_symbol():
         "\t\t(duplicate_pin_numbers_are_jumpers no)"
     )
 
-    # --- properties ---
-    ref_y = BODY_TOP + 1.27    # just above the body rectangle
+    ref_y = g.body_top + 1.27    # just above the body rectangle
     parts.append(_property("Reference",   "U",             -10.16, ref_y))
-    parts.append(_property("Value",       "Iridium_9704",   10.16, ref_y))
-    parts.append(_property("Footprint",   "Iridium_9704:Iridium_9704", 0, -5.08, hidden=True))
-    parts.append(_property("Datasheet",   "https://www.iridium.com/products/iridium-certus-9704/", 0, -7.62, hidden=True))
-    parts.append(_property("Description",
-        "Iridium Certus 9704 L-band satellite transceiver module, 88-pin LGA",
-        0, 0, hidden=True))
-    parts.append(_property("ki_keywords",
-        "Iridium Certus 9704 satellite transceiver RF module",
-        0, 0, hidden=True))
-    parts.append(_property("ki_fp_filters", "Iridium*9704*", 0, 0, hidden=True))
+    parts.append(_property("Value",       name,             10.16, ref_y))
+    parts.append(_property("Footprint",   f"{LIB}:{name}", 0, -5.08, hidden=True))
+    parts.append(_property("Datasheet",   module["datasheet"], 0, -7.62, hidden=True))
+    parts.append(_property("Description", module["description"], 0, 0, hidden=True))
+    parts.append(_property("ki_keywords", module["keywords"], 0, 0, hidden=True))
+    parts.append(_property("ki_fp_filters", module["ki_fp_filters"], 0, 0, hidden=True))
 
     # --- unit-0 drawing: body rectangle ---
     parts.append(
-        f"\t\t(symbol \"Iridium_9704_0_1\"\n"
+        f"\t\t(symbol \"{name}_0_1\"\n"
         f"\t\t\t(rectangle\n"
-        f"\t\t\t\t(start {_r(BODY_LEFT)} {_r(BODY_TOP)})\n"
-        f"\t\t\t\t(end {_r(BODY_RIGHT)} {_r(BODY_BOTTOM)})\n"
+        f"\t\t\t\t(start {_r(BODY_LEFT)} {_r(g.body_top)})\n"
+        f"\t\t\t\t(end {_r(BODY_RIGHT)} {_r(g.body_bottom)})\n"
         f"\t\t\t\t(stroke\n"
         f"\t\t\t\t\t(width 0.254)\n"
         f"\t\t\t\t\t(type default)\n"
@@ -715,37 +645,31 @@ def generate_symbol():
     # --- unit-1 pins ---
     pins = []
 
-    # Left-side signal pins
-    for i, pin_num in enumerate(LEFT_LAYOUT):
+    for i, pin_num in enumerate(sym["left_layout"]):
         if pin_num is None:
             continue
-        name, ptype = SIGNAL_PINS[pin_num]
-        pins.append(_pin(ptype, name, str(pin_num), LEFT_X, LEFT_Y[i], 0))
+        pin_name, ptype = signals[pin_num]
+        pins.append(_pin(ptype, pin_name, str(pin_num), LEFT_X, g.left_y[i], 0))
 
-    # Right-side signal pins
-    for i, pin_num in enumerate(RIGHT_LAYOUT):
+    for i, pin_num in enumerate(sym["right_layout"]):
         if pin_num is None:
             continue
-        name, ptype = SIGNAL_PINS[pin_num]
-        pins.append(_pin(ptype, name, str(pin_num), RIGHT_X, RIGHT_Y[i], 180))
+        pin_name, ptype = signals[pin_num]
+        pins.append(_pin(ptype, pin_name, str(pin_num), RIGHT_X, g.right_y[i], 180))
 
-    # Top power pins -------------------------------------------------------
-    # V_IO (pin 33)
-    pins.append(_pin("power_in", "V_IO", "33", TOP_X[33], TOP_Y, 270))
+    # Power groups: one native pin stack per net
+    for net, group in sym["power"].items():
+        numbers = group["pins"]
+        number = str(numbers[0]) if len(numbers) == 1 else _stack(numbers)
+        pins.append(_pin("power_in", net, number, group["top_x"], g.top_y, 270))
 
-    # V_BAT_MAIN and V_BAT_PA: one native pin stack each
-    pins.append(_pin("power_in", "V_BAT_MAIN", _stack(V_BAT_MAIN_PINS), TOP_X[34], TOP_Y, 270))
-    pins.append(_pin("power_in", "V_BAT_PA", _stack(V_BAT_PA_PINS), TOP_X[37], TOP_Y, 270))
+    pins.append(_pin("power_in", "GND", _stack(sym["gnd"]), 0, g.bottom_y, 90))
 
-    # Bottom GND: one native pin stack ---------------------------------------
-    pins.append(_pin("power_in", "GND", _stack(GND_PINS), 0, BOTTOM_Y, 90))
-
-    # NC pins: all hidden no_connect, placed inside the body ----------------
-    # Spread them in a grid inside the rectangle
+    # NC pins: hidden, spread in a grid inside the body
     nc_cols = 6
-    nc_x0 = BODY_LEFT + 2.54     # -10.16
-    nc_y0 = BODY_TOP  - 2.54     #  22.86
-    for idx, p in enumerate(NC_PINS):
+    nc_x0 = BODY_LEFT + 2.54
+    nc_y0 = g.body_top - 2.54
+    for idx, p in enumerate(sym["nc"]):
         col = idx % nc_cols
         row = idx // nc_cols
         nx = nc_x0 + col * 2.54
@@ -754,56 +678,77 @@ def generate_symbol():
 
     pins.sort(key=_pin_sort_key)
 
-    unit1 = "\t\t(symbol \"Iridium_9704_1_1\"\n"
+    unit1 = f"\t\t(symbol \"{name}_1_1\"\n"
     unit1 += "\n".join(pins)
     unit1 += "\n\t\t)"
     parts.append(unit1)
 
-    # --- footer ---
     parts.append("\t\t(embedded_fonts no)")
-    parts.append("\t)")   # close symbol
-    parts.append(")")     # close lib
-
-    return "\n".join(parts) + "\n"
+    parts.append("\t)")
+    return "\n".join(parts)
 
 
-def main_footprint(out_path):
-    with open(os.path.join(SCRIPT_DIR, "pad_data.json")) as f:
-        pin_data = json.load(f)
-    content = generate_footprint(pin_data)
+def generate_symbols(modules):
+    """Build the complete .kicad_sym content string for the given modules."""
+    header = (
+        "(kicad_symbol_lib\n"
+        "\t(version 20251024)\n"
+        "\t(generator \"kicad_symbol_editor\")\n"
+        "\t(generator_version \"10.0\")"
+    )
+    blocks = [_symbol_block(m) for m in sorted(modules, key=lambda m: m["name"])]
+    return "\n".join([header] + blocks + [")"]) + "\n"
+
+
+def main_footprint(module_path, out_path):
+    module = load_module(module_path)
+    content = generate_footprint(module)
     _write(out_path, content)
     print(f"Footprint written to {out_path}")
 
-    smd_count = content.count("smd rect") + content.count("smd roundrect")
-    npth_count = content.count("np_thru_hole")
-    via_count = content.count("thru_hole circle")
-    print(f"SMD pads:     {smd_count}  (expected 88)")
-    print(f"NPTH holes:   {npth_count}  (expected 0 — holes on Dwgs.User)")
-    print(f"Vias:         {via_count}  (expected 20)")
-    assert smd_count == 88, f"Expected 88 SMD pads, got {smd_count}"
-    assert npth_count == 0,  f"Expected 0 NPTH, got {npth_count}"
-    assert via_count == 20,  f"Expected 20 vias, got {via_count}"
+    expect = module["footprint"]["expect"]
+    counts = {
+        "smd": content.count("smd rect") + content.count("smd roundrect"),
+        "npth": content.count("np_thru_hole"),
+        "vias": content.count("thru_hole circle"),
+    }
+    print(f"SMD pads:     {counts['smd']}  (expected {expect['smd']})")
+    print(f"NPTH holes:   {counts['npth']}  (expected {expect['npth']})")
+    print(f"Vias:         {counts['vias']}  (expected {expect['vias']})")
+    for key, want in expect.items():
+        assert counts[key] == want, f"Expected {want} {key}, got {counts[key]}"
     print("All counts OK.")
 
 
-def main_symbol(out_path):
-    content = generate_symbol()
+def main_symbol(module_paths, out_path):
+    modules = [load_module(p) for p in module_paths]
+    content = generate_symbols(modules)
     _write(out_path, content)
-    print(f"Symbol written to {out_path}")
+    print(f"Symbol library written to {out_path}")
 
-    pin_count = sum(len(_unstack(n)) for n in re.findall(r'\(number "([^"]+)"', content))
-    print(f"Total pins: {pin_count}")
-    assert pin_count == 88, f"Expected 88 pins, got {pin_count}"
-    print("Pin count OK (88).")
+    for module in modules:
+        block = _symbol_block(module)
+        pin_count = sum(len(_unstack(n)) for n in re.findall(r'\(number "([^"]+)"', block))
+        want = module["symbol"]["expect_pins"]
+        print(f"{module['name']}: {pin_count} pins (expected {want})")
+        assert pin_count == want, f"{module['name']}: expected {want} pins, got {pin_count}"
+    print("Pin counts OK.")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("footprint", "symbol"):
-        sub.add_parser(name).add_argument("--out", required=True)
+    fp = sub.add_parser("footprint")
+    fp.add_argument("--module", required=True)
+    fp.add_argument("--out", required=True)
+    sym = sub.add_parser("symbol")
+    sym.add_argument("--module", action="append", required=True)
+    sym.add_argument("--out", required=True)
     args = ap.parse_args()
-    {"footprint": main_footprint, "symbol": main_symbol}[args.cmd](args.out)
+    if args.cmd == "footprint":
+        main_footprint(args.module, args.out)
+    else:
+        main_symbol(args.module, args.out)
 
 
 if __name__ == "__main__":

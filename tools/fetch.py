@@ -24,7 +24,7 @@ import urllib.request
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_UA = "iridium-9704-kicad-lib-ci/1.0 (+https://github.com/ndoo/iridium-9704-kicad-lib)"
+DEFAULT_UA = "iridium-kicad-lib-ci/1.0 (+https://github.com/ndoo/iridium-kicad-lib)"
 RETRIES = 4
 
 

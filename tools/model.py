@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""3D model steps.
+"""3D model steps, driven by the "model" section of modules/<name>/module.json.
 
   can       extract the shielding can from the vendor STEP assembly, moved from
-            the vendor frame into the KiCad 3D frame:
-                final_x = local_y - 15.75
-                final_y = 21.0 - local_x
-                final_z = local_z + 0.05
+            the vendor frame into the KiCad 3D frame (a quarter turn about Z
+            followed by the module's vendor.translate)
   assemble  build the module STEP: XCAF-coloured PCB box, shielding can, a
             rounded-rectangle label plate, and one face per filled label path.
 
 Usage:
-  python tools/model.py can --vendor VENDOR.step --out can.step
-  python tools/model.py assemble --label LABEL.svg --can CAN.step --out OUT.step
+  python tools/model.py can --module modules/9704 --vendor VENDOR.step --out can.step
+  python tools/model.py assemble --module modules/9704 --label LABEL.svg --can CAN.step --out OUT.step
 """
 
 import argparse
+import json
 import math
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -51,14 +51,19 @@ from OCP.gp import gp_Ax1, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
 # Shielding can
 # ----------------------------------------------------------------------
 
-MODULE_NAME = "IRDM_9704"
-CAN_NAME = "P5042-DP-011"
-CAN_SIZE = (30.6, 41.1, 2.5)
 SIZE_TOL = 0.05
 
 
 def die(msg):
     sys.exit(f"model: {msg}")
+
+
+def load_model_spec(module_dir):
+    with open(os.path.join(module_dir, "module.json")) as f:
+        spec = json.load(f).get("model")
+    if spec is None or spec.get("kind") != "vendor-step+label":
+        die(f"{module_dir} has no vendor-step+label model")
+    return spec
 
 
 def label_name(label):
@@ -92,15 +97,18 @@ def find_part(label, name, loc):
     return None
 
 
-def vendor_to_kicad():
+def vendor_to_kicad(translate):
     rot = gp_Trsf()
     rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), -math.pi / 2)
     move = gp_Trsf()
-    move.SetTranslation(gp_Vec(-15.75, 21.0, 0.05))
+    move.SetTranslation(gp_Vec(*translate))
     return move.Multiplied(rot)
 
 
 def main_can(args):
+    vendor = load_model_spec(args.module)["vendor"]
+    module_part, can_part = vendor["module_part"], vendor["can_part"]
+    can_size = vendor["can_size"]
     doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
     reader = STEPCAFControl_Reader()
     reader.SetNameMode(True)
@@ -116,16 +124,16 @@ def main_can(args):
     if roots.Length() < 1:
         die("vendor file has no shapes")
 
-    module = find_part(roots.Value(1), MODULE_NAME, TopLoc_Location())
+    module = find_part(roots.Value(1), module_part, TopLoc_Location())
     if module is None:
-        die(f"component {MODULE_NAME} not found")
-    can = find_part(module[0], CAN_NAME, TopLoc_Location())
+        die(f"component {module_part} not found")
+    can = find_part(module[0], can_part, TopLoc_Location())
     if can is None:
-        die(f"component {CAN_NAME} not found inside {MODULE_NAME}")
+        die(f"component {can_part} not found inside {module_part}")
 
     can_label, can_loc = can
     shape = XCAFDoc_ShapeTool.GetShape_s(can_label).Moved(can_loc)
-    xf = BRepBuilderAPI_Transform(shape, vendor_to_kicad(), True)
+    xf = BRepBuilderAPI_Transform(shape, vendor_to_kicad(vendor["translate"]), True)
     xf.Build()
     shape = xf.Shape()
 
@@ -133,9 +141,9 @@ def main_can(args):
     BRepBndLib.Add_s(shape, box)
     x0, y0, z0, x1, y1, z1 = box.Get()
     size = (x1 - x0, y1 - y0, z1 - z0)
-    if any(abs(a - b) > SIZE_TOL for a, b in zip(size, CAN_SIZE)):
+    if any(abs(a - b) > SIZE_TOL for a, b in zip(size, can_size)):
         die("can bbox %.3f x %.3f x %.3f does not match expected %.1f x %.1f x %.1f"
-            % (*size, *CAN_SIZE))
+            % (*size, *can_size))
 
     Interface_Static.SetCVal_s("write.step.schema", "AP214")
     writer = STEPControl_Writer()
@@ -149,25 +157,6 @@ def main_can(args):
 # ----------------------------------------------------------------------
 # Module assembly
 # ----------------------------------------------------------------------
-
-# Label SVG transform; every path in the SVG shares it
-SVG_MATRIX = (0.11336544, 0.08415391, 0.12969845, -0.17843548, -92.83972366, 44.27718702)
-
-TOP_Z = 3.954
-LABEL_Z = 3.96  # above the plate top to avoid z-fighting
-
-PLATE_X_MIN, PLATE_X_MAX = -13.5, 13.5
-PLATE_Y_MIN, PLATE_Y_MAX = -19.0, 19.0
-PLATE_Z_MIN = 3.850
-PLATE_CORNER_R = 1.5
-
-PCB_MIN = (-15.75, -21.0, 0.0)
-PCB_MAX = (15.75, 21.0, 1.35)
-
-# SVG display -> model: x = svg_y + offset, y = svg_x + offset (no negation,
-# which would mirror the label); offsets centre the label on the plate
-SVG_TO_STEP_X_OFFSET = 19.56
-SVG_TO_STEP_Y_OFFSET = -23.73
 
 SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -341,30 +330,34 @@ def apply_svg_transform(x, y, matrix):
     return a * x + c * y + e, b * x + d * y + f
 
 
-def svg_display_to_step(svg_x, svg_y):
-    """Map SVG display coordinates to STEP model coordinates."""
-    return svg_y + SVG_TO_STEP_X_OFFSET, svg_x + SVG_TO_STEP_Y_OFFSET
+def svg_display_to_step(svg_x, svg_y, offset):
+    """Map SVG display coordinates to STEP model coordinates.
+
+    x = svg_y + offset[0], y = svg_x + offset[1]; there is no negation, which
+    would mirror the label.
+    """
+    return svg_y + offset[0], svg_x + offset[1]
 
 
-def transform_point_to_step(src_x, src_y, matrix):
+def transform_point_to_step(src_x, src_y, matrix, offset):
     """Full pipeline: source SVG coords -> display -> STEP."""
     disp_x, disp_y = apply_svg_transform(src_x, src_y, matrix)
-    return svg_display_to_step(disp_x, disp_y)
+    return svg_display_to_step(disp_x, disp_y, offset)
 
 
-def transform_segment_to_step(seg, matrix):
+def transform_segment_to_step(seg, matrix, offset):
     """Transform a path segment from SVG source coords to STEP coords."""
     if seg[0] == 'L':
         _, x1, y1, x2, y2 = seg
-        sx1, sy1 = transform_point_to_step(x1, y1, matrix)
-        sx2, sy2 = transform_point_to_step(x2, y2, matrix)
+        sx1, sy1 = transform_point_to_step(x1, y1, matrix, offset)
+        sx2, sy2 = transform_point_to_step(x2, y2, matrix, offset)
         return ('L', sx1, sy1, sx2, sy2)
     elif seg[0] == 'C':
         _, x1, y1, cx1, cy1, cx2, cy2, x2, y2 = seg
-        sx1, sy1 = transform_point_to_step(x1, y1, matrix)
-        scx1, scy1 = transform_point_to_step(cx1, cy1, matrix)
-        scx2, scy2 = transform_point_to_step(cx2, cy2, matrix)
-        sx2, sy2 = transform_point_to_step(x2, y2, matrix)
+        sx1, sy1 = transform_point_to_step(x1, y1, matrix, offset)
+        scx1, scy1 = transform_point_to_step(cx1, cy1, matrix, offset)
+        scx2, scy2 = transform_point_to_step(cx2, cy2, matrix, offset)
+        sx2, sy2 = transform_point_to_step(x2, y2, matrix, offset)
         return ('C', sx1, sy1, scx1, scy1, scx2, scy2, sx2, sy2)
     return seg
 
@@ -453,8 +446,9 @@ def make_rounded_rect_pts(xmin, xmax, ymin, ymax, r, n_arc=8):
     return pts
 
 
-def load_svg_faces(svg_path):
+def load_svg_faces(svg_path, label):
     """Return (faces, failed, too_small) for the filled paths in the SVG."""
+    matrix, offset, z = label["svg_matrix"], label["svg_to_step_offset"], label["z"]
     root = ET.parse(svg_path).getroot()
     faces = []
     failed = 0
@@ -465,7 +459,7 @@ def load_svg_faces(svg_path):
         if not d_str:
             continue
         sub_paths = [
-            [transform_segment_to_step(seg, SVG_MATRIX) for seg in sp]
+            [transform_segment_to_step(seg, matrix, offset) for seg in sp]
             for sp in parse_svg_path(d_str)
         ]
         if not sub_paths:
@@ -473,11 +467,11 @@ def load_svg_faces(svg_path):
 
         # First sub-path is the outer contour, the rest are holes
         if len(sub_paths) == 1:
-            wire = segments_to_wire(sub_paths[0], LABEL_Z)
+            wire = segments_to_wire(sub_paths[0], z)
             maker = BRepBuilderAPI_MakeFace(wire) if wire is not None else None
             face = maker.Face() if maker is not None and maker.IsDone() else None
         else:
-            face = make_face_with_holes(sub_paths[0], sub_paths[1:], LABEL_Z)
+            face = make_face_with_holes(sub_paths[0], sub_paths[1:], z)
         if face is None:
             failed += 1
             continue
@@ -508,20 +502,20 @@ def load_can(can_path):
     return solids[0]
 
 
-def make_plate():
-    pts = make_rounded_rect_pts(
-        PLATE_X_MIN, PLATE_X_MAX, PLATE_Y_MIN, PLATE_Y_MAX, PLATE_CORNER_R
-    )
+def make_plate(plate):
+    (x_min, x_max), (y_min, y_max) = plate["x"], plate["y"]
+    z_min, z_max = plate["z"]
+    pts = make_rounded_rect_pts(x_min, x_max, y_min, y_max, plate["corner_r"])
     wire_builder = BRepBuilderAPI_MakeWire()
     for i, (x1, y1) in enumerate(pts):
         x2, y2 = pts[(i + 1) % len(pts)]
         if (x2 - x1) ** 2 + (y2 - y1) ** 2 < 1e-12:
             continue
         wire_builder.Add(BRepBuilderAPI_MakeEdge(
-            gp_Pnt(x1, y1, PLATE_Z_MIN), gp_Pnt(x2, y2, PLATE_Z_MIN)
+            gp_Pnt(x1, y1, z_min), gp_Pnt(x2, y2, z_min)
         ).Edge())
     face = BRepBuilderAPI_MakeFace(wire_builder.Wire()).Face()
-    return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, TOP_Z - PLATE_Z_MIN)).Shape()
+    return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, z_max - z_min)).Shape()
 
 
 def quarter_turn(shape):
@@ -532,12 +526,13 @@ def quarter_turn(shape):
 
 
 def main_assemble(args):
+    spec = load_model_spec(args.module)
     print(f"Reading {args.label}")
-    label_faces, failed, too_small = load_svg_faces(args.label)
+    label_faces, failed, too_small = load_svg_faces(args.label, spec["label"])
     print(f"Created {len(label_faces)} faces, {failed} failed, {too_small} too small")
     can = load_can(args.can)
-    plate = make_plate()
-    pcb = BRepPrimAPI_MakeBox(gp_Pnt(*PCB_MIN), gp_Pnt(*PCB_MAX)).Shape()
+    plate = make_plate(spec["label"]["plate"])
+    pcb = BRepPrimAPI_MakeBox(gp_Pnt(*spec["pcb"]["min"]), gp_Pnt(*spec["pcb"]["max"])).Shape()
 
     doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
     shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
@@ -582,9 +577,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("can", help="extract the shielding can from the vendor STEP")
+    p.add_argument("--module", required=True, help="module directory, e.g. modules/9704")
     p.add_argument("--vendor", required=True, help="vendor assembly STEP")
     p.add_argument("--out", required=True, help="output STEP with the can only")
     p = sub.add_parser("assemble", help="build the module STEP from the can and label")
+    p.add_argument("--module", required=True, help="module directory, e.g. modules/9704")
     p.add_argument("--label", required=True, help="label SVG")
     p.add_argument("--can", required=True, help="shielding can STEP")
     p.add_argument("--out", required=True, help="output STEP")

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Render the footprint, symbol and 3D model to PNG/GIF images with kicad-cli.
+"""Render each module's footprint, symbol and 3D model to PNG/GIF images with kicad-cli.
 
 Writes a scratch board holding the footprint, then renders it the way the
 kicad-render-pcb GitHub Action does (top, bottom, plus an angled view and a
 rotating animation) and exports 2D images of the footprint and the symbol.
 
-Usage: python tools/render.py [--out out/render] [--lib out]
+Usage: python tools/render.py --module modules/9704 [--module ...] [--out out/render] [--lib out]
+Images for a module are written to <out>/<module directory name>/.
 Environment: KICAD_CLI is the kicad-cli command (default: kicad-cli); RSVG is
 rsvg-convert (default: rsvg-convert). Each image gets a progress line; command output
 is shown only on failure, and RENDER_VERBOSE=1 echoes every command and its output.
@@ -19,13 +20,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 
 from PIL import Image, ImageChops
 
-LIB = "Iridium_9704"
+from kicad import LIB, load_module
+
 BOARD_CENTRE = (60.0, 50.0)
 BOARD_MARGIN = 5.0
-MODULE_SIZE = (42.0, 31.5)   # footprint extent after the quarter turn
 FRAME_STEP = 3       # degrees per rotation frame
 FRAME_SIZE = 400     # pixels
 FRAME_ZOOM = 0.7
@@ -70,11 +72,13 @@ BOARD_HEADER = """(kicad_pcb
 """
 
 
-def board_text(footprint_path):
+def board_text(footprint_path, module):
     """A board with the footprint at BOARD_CENTRE inside a rectangular outline."""
     cx, cy = BOARD_CENTRE
-    hw = MODULE_SIZE[0] / 2 + BOARD_MARGIN
-    hh = MODULE_SIZE[1] / 2 + BOARD_MARGIN
+    # The footprint is turned a quarter, so width and height swap
+    hw = module["pad_data"]["mod_h"] / 2 + BOARD_MARGIN
+    hh = module["pad_data"]["mod_w"] / 2 + BOARD_MARGIN
+    outline_uuid = uuid.uuid5(uuid.UUID(module["uuid_namespace"]), "render:outline")
     with open(footprint_path) as f:
         lines = f.read().rstrip("\n").split("\n")
     placed = []
@@ -84,7 +88,7 @@ def board_text(footprint_path):
             placed.append(f"\t(at {cx} {cy})")
     outline = (f'\t(gr_rect (start {cx - hw} {cy - hh}) (end {cx + hw} {cy + hh}) '
                f'(stroke (width 0.05) (type default)) (fill no) (layer "Edge.Cuts") '
-               f'(uuid "6f1c2a52-9704-4c3e-b5a1-3d1a0e7c0001"))')
+               f'(uuid "{outline_uuid}"))')
     return BOARD_HEADER + "\n".join(placed).replace("\n(footprint", "\n\t(footprint", 1) + "\n" + outline + "\n)\n"
 
 
@@ -145,27 +149,17 @@ def run(cmd, env=None, stream=False):
         sys.exit(f"render: failed: {' '.join(shlex.quote(c) for c in cmd)}")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--lib", default="out", help="directory with the built library")
-    ap.add_argument("--out", default="out/render")
-    args = ap.parse_args()
-
-    cli = shlex.split(os.environ.get("KICAD_CLI", "kicad-cli"))
-    rsvg = os.environ.get("RSVG", "rsvg-convert")
-    lib = os.path.abspath(args.lib)
-    out = os.path.abspath(args.out)
+def render_module(cli, rsvg, lib, out, module, env):
+    module_name = module["name"]
     os.makedirs(out, exist_ok=True)
-    env = dict(os.environ, IRIDIUM_9704_3DMODEL_DIR=lib)
-
-    footprint = os.path.join(lib, f"{LIB}.pretty", f"{LIB}.kicad_mod")
+    footprint = os.path.join(lib, f"{LIB}.pretty", f"{module_name}.kicad_mod")
     symbols = os.path.join(lib, f"{LIB}.kicad_sym")
     # Scratch files live under the output directory so a containerised kicad-cli, which
     # mounts only the working directory, can read them.
     with tempfile.TemporaryDirectory(prefix=".render-", dir=out) as tmp:
         board = os.path.join(tmp, "board.kicad_pcb")
         with open(board, "w") as f:
-            f.write(board_text(footprint))
+            f.write(board_text(footprint, module))
 
         def render(name, *extra):
             step(name)
@@ -198,20 +192,36 @@ def main():
                        transparency=255, disposal=2)
 
         step("render-footprint.png")
-        run(cli + ["fp", "export", "svg", "--footprint", LIB, "--layers",
+        run(cli + ["fp", "export", "svg", "--footprint", module_name, "--layers",
                    "F.Cu,F.Mask,F.SilkS,F.Fab,F.CrtYd,Dwgs.User", "-o", tmp,
                    os.path.join(lib, f"{LIB}.pretty")], env=env)
-        pad_svg(os.path.join(tmp, f"{LIB}.svg"), 2.5)
-        run([rsvg, "-w", "1600", "-b", "white", os.path.join(tmp, f"{LIB}.svg"),
+        pad_svg(os.path.join(tmp, f"{module_name}.svg"), 2.5)
+        run([rsvg, "-w", "1600", "-b", "white", os.path.join(tmp, f"{module_name}.svg"),
              "-o", os.path.join(out, "render-footprint.png")])
         fit(os.path.join(out, "render-footprint.png"), aspect=4 / 3, transparent=False)
         step("render-symbol.png")
-        run(cli + ["sym", "export", "svg", "-o", tmp, symbols], env=env)
-        run([rsvg, "-w", "1200", "-b", "white", os.path.join(tmp, f"{LIB}_unit1.svg"),
+        run(cli + ["sym", "export", "svg", "--symbol", module_name, "-o", tmp, symbols], env=env)
+        run([rsvg, "-w", "1200", "-b", "white", os.path.join(tmp, f"{module_name}_unit1.svg"),
              "-o", os.path.join(out, "render-symbol.png")])
         fit(os.path.join(out, "render-symbol.png"), aspect=4 / 3, transparent=False)
-    for name in sorted(os.listdir(out)):
-        print(f"{os.path.getsize(os.path.join(out, name)):>9}  {name}")
+    for image in sorted(os.listdir(out)):
+        print(f"{os.path.getsize(os.path.join(out, image)):>9}  {image}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--lib", default="out", help="directory with the built library")
+    ap.add_argument("--out", default="out/render")
+    ap.add_argument("--module", action="append", required=True)
+    args = ap.parse_args()
+
+    cli = shlex.split(os.environ.get("KICAD_CLI", "kicad-cli"))
+    rsvg = os.environ.get("RSVG", "rsvg-convert")
+    lib = os.path.abspath(args.lib)
+    env = dict(os.environ, IRIDIUM_MODULES_3DMODEL_DIR=lib)
+    for path in args.module:
+        out = os.path.join(os.path.abspath(args.out), os.path.basename(os.path.normpath(path)))
+        render_module(cli, rsvg, lib, out, load_module(path), env)
 
 
 if __name__ == "__main__":

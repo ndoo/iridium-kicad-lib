@@ -3,18 +3,23 @@ KICAD_CLI ?= kicad-cli
 OUT    ?= out
 THIRD_PARTY  ?= third_party
 
-LIB      := Iridium_9704
-FOOTPRINT := $(OUT)/$(LIB).pretty/$(LIB).kicad_mod
+LIB       := Iridium_Modules
+MODULES   ?= $(sort $(patsubst modules/%/module.json,%,$(wildcard modules/*/module.json)))
+FOOTPRINTS := $(foreach m,$(MODULES),$(OUT)/$(LIB).pretty/Iridium_$(m).kicad_mod)
+STEPS     := $(foreach m,$(MODULES),$(OUT)/$(LIB).3dshapes/Iridium_$(m).step)
 SYMBOL    := $(OUT)/$(LIB).kicad_sym
-LABEL     := $(OUT)/build/label.svg
-CAN       := $(OUT)/build/can.step
-STEP      := $(OUT)/$(LIB).3dshapes/$(LIB).step
 ZIP       := $(OUT)/$(LIB)-kicad-lib.zip
 INSTALL   := $(OUT)/build/INSTALL.txt
 RENDER_DIR := $(OUT)/render
+RENDERS   := $(foreach m,$(MODULES),$(RENDER_DIR)/$(m)/render-top.png)
+MODULE_ARGS := $(addprefix --module modules/,$(MODULES))
 
-VENDOR_STEP := $(THIRD_PARTY)/vendor/RockBLOCK_9704-SMA-2A.step
 FONTS_STAMP := $(THIRD_PARTY)/.fetched
+
+# Each module.mk adds its label and can targets to these and defines the rule for its STEP
+LABELS :=
+CANS   :=
+include $(foreach m,$(MODULES),modules/$(m)/module.mk)
 
 .PHONY: all fetch verify footprint symbol label can step package render check klc clean distclean
 
@@ -31,49 +36,37 @@ $(FONTS_STAMP): assets.lock tools/fetch.py
 verify:
 	$(PYTHON) tools/fetch.py --verify
 
-footprint: $(FOOTPRINT)
+footprint: $(FOOTPRINTS)
 symbol: $(SYMBOL)
-label: $(LABEL)
-can: $(CAN)
-step: $(STEP)
+label: $(LABELS)
+can: $(CANS)
+step: $(STEPS)
 package: $(ZIP)
-render: $(RENDER_DIR)/render-top.png
+render: $(RENDERS)
 
-$(FOOTPRINT): tools/kicad.py tools/pad_data.json
-	$(PYTHON) tools/kicad.py footprint --out $@
+$(OUT)/$(LIB).pretty/Iridium_%.kicad_mod: tools/kicad.py modules/%/module.json modules/%/pads.json
+	$(PYTHON) tools/kicad.py footprint --module modules/$* --out $@
 
-$(SYMBOL): tools/kicad.py
-	$(PYTHON) tools/kicad.py symbol --out $@
+$(SYMBOL): tools/kicad.py $(foreach m,$(MODULES),modules/$(m)/module.json)
+	$(PYTHON) tools/kicad.py symbol $(MODULE_ARGS) --out $@
 
-$(LABEL): $(FONTS_STAMP) tools/label.py
-	@mkdir -p $(dir $@)
-	$(PYTHON) tools/label.py --fonts $(THIRD_PARTY)/fonts --assets $(THIRD_PARTY)/logos --out $@
-
-$(CAN): $(FONTS_STAMP) tools/model.py
-	@mkdir -p $(dir $@)
-	$(PYTHON) tools/model.py can --vendor $(VENDOR_STEP) --out $@
-
-$(STEP): $(LABEL) $(CAN) tools/model.py
-	@mkdir -p $(dir $@)
-	$(PYTHON) tools/model.py assemble --label $(LABEL) --can $(CAN) --out $@
-
-# Images of the footprint, symbol and 3D model; needs kicad-cli (KICAD_CLI) and rsvg-convert.
-$(RENDER_DIR)/render-top.png: $(FOOTPRINT) $(SYMBOL) $(STEP) tools/render.py
-	KICAD_CLI="$(KICAD_CLI)" $(PYTHON) tools/render.py --lib $(OUT) --out $(RENDER_DIR)
+# Images of each module's footprint, symbol and 3D model; needs kicad-cli (KICAD_CLI) and rsvg-convert.
+$(RENDER_DIR)/%/render-top.png: $(OUT)/$(LIB).pretty/Iridium_%.kicad_mod $(SYMBOL) $(OUT)/$(LIB).3dshapes/Iridium_%.step tools/render.py
+	KICAD_CLI="$(KICAD_CLI)" $(PYTHON) tools/render.py --lib $(OUT) --out $(RENDER_DIR) --module modules/$*
 
 $(INSTALL): Makefile
 	@mkdir -p $(dir $@)
 	@printf '%s\n' \
-	  'Iridium 9704 KiCad library' \
+	  'Iridium Modules KiCad library' \
 	  '' \
-	  '1. Preferences > Manage Symbol Libraries: add Iridium_9704.kicad_sym with nickname Iridium_9704.' \
-	  '2. Preferences > Manage Footprint Libraries: add Iridium_9704.pretty with nickname Iridium_9704.' \
-	  '3. Preferences > Configure Paths: define IRIDIUM_9704_3DMODEL_DIR as the absolute path of the' \
-	  '   directory this file is in. The footprint loads' \
-	  '   $${IRIDIUM_9704_3DMODEL_DIR}/Iridium_9704.3dshapes/Iridium_9704.step' > $@
+	  '1. Preferences > Manage Symbol Libraries: add $(LIB).kicad_sym with nickname $(LIB).' \
+	  '2. Preferences > Manage Footprint Libraries: add $(LIB).pretty with nickname $(LIB).' \
+	  '3. Preferences > Configure Paths: define IRIDIUM_MODULES_3DMODEL_DIR as the absolute path of the' \
+	  '   directory this file is in. Each footprint loads' \
+	  '   $${IRIDIUM_MODULES_3DMODEL_DIR}/$(LIB).3dshapes/<footprint name>.step' > $@
 
 # Deterministic zip: fixed file order, timestamps normalised, no extra attributes.
-$(ZIP): $(FOOTPRINT) $(SYMBOL) $(STEP) $(INSTALL)
+$(ZIP): $(FOOTPRINTS) $(SYMBOL) $(STEPS) $(INSTALL)
 	@rm -rf $(OUT)/build/stage $@
 	@mkdir -p $(OUT)/build/stage
 	@cp -R $(OUT)/$(LIB).pretty $(OUT)/$(LIB).3dshapes $(SYMBOL) $(INSTALL) $(OUT)/build/stage/
@@ -81,21 +74,16 @@ $(ZIP): $(FOOTPRINT) $(SYMBOL) $(STEP) $(INSTALL)
 	cd $(OUT)/build/stage && find . -type f | LC_ALL=C sort | sed 's|^\./||' | zip -X -q -@ $(abspath $@)
 	@echo "wrote $@"
 
-# CHECK_STEP=1 also requires the STEP model to exist and be non-empty.
+# CHECK_STEP=1 also requires every STEP model to exist and be non-empty.
 CHECK_STEP ?= 0
 
-check: $(FOOTPRINT) $(SYMBOL)
-	@test -s $(FOOTPRINT) || { echo "missing $(FOOTPRINT)"; exit 1; }
-	@test -s $(SYMBOL) || { echo "missing $(SYMBOL)"; exit 1; }
-	@if [ "$(CHECK_STEP)" = 1 ] || [ -e $(STEP) ]; then test -s $(STEP) || { echo "missing or empty $(STEP)"; exit 1; }; else echo "STEP not built, skipped"; fi
-	@test "$$(grep -Ec '\(pad "[0-9]+" smd' $(FOOTPRINT))" = 88 || { echo "footprint: expected 88 numbered pads"; exit 1; }
-	@test "$$(grep -c '(pin ' $(SYMBOL))" = 52 || { echo "symbol: expected 52 pin entries (88 pins)"; exit 1; }
-	@echo "check OK"
+check: $(FOOTPRINTS) $(SYMBOL)
+	$(PYTHON) tools/check.py --lib $(OUT) $(if $(filter 1,$(CHECK_STEP)),--step) $(MODULE_ARGS)
 
 # KLC_DIR is the library_utils directory of a kicad-library-tools checkout.
 KLC_DIR ?= kicad-library-tools/library_utils
 
-klc: $(FOOTPRINT) $(SYMBOL)
+klc: $(FOOTPRINTS) $(SYMBOL)
 	$(PYTHON) tools/klc_check.py --klc $(KLC_DIR) --lib $(OUT)
 
 clean:

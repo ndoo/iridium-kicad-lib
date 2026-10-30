@@ -36,12 +36,12 @@ jobs:
         run: make render KICAD_CLI="$PWD/tools/kicad-cli-docker.sh"
       - uses: actions/upload-artifact@v4
         with:
-          name: Iridium_9704-kicad-lib
-          path: out/Iridium_9704-kicad-lib.zip
+          name: Iridium_Modules-kicad-lib
+          path: out/Iridium_Modules-kicad-lib.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
-          name: Iridium_9704-renders
+          name: Iridium_Modules-renders
           path: out/render/
           if-no-files-found: error
 
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Iridium_9704-renders
+          name: Iridium_Modules-renders
           path: render
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
@@ -91,13 +91,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Iridium_9704-kicad-lib
+          name: Iridium_Modules-kicad-lib
       - uses: actions/download-artifact@v4
         with:
-          name: Iridium_9704-renders
+          name: Iridium_Modules-renders
           path: render
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            Iridium_9704-kicad-lib.zip
+            Iridium_Modules-kicad-lib.zip
             render/*
