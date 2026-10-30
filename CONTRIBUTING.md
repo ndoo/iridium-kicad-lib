@@ -6,6 +6,10 @@ This repository holds original source only. Do not contribute proprietary or thi
 
 Footprint and symbol output is deterministic: rebuilds must be byte-identical, and items are written in the order KiCad saves them. A footprint already placed in a PCB must be deleted and re-created to pick up pad or net changes, so call such changes out in the pull request.
 
+## Adding a module
+
+See [Adding a module](README.md#adding-a-module) in the README. A new module must build with `make` and pass `make check` and `make klc` without changes to `tools/`.
+
 ## Building
 
 See [Build](README.md#build) in the README. `cadquery-ocp` must stay on 7.9.x (see `requirements.txt`).

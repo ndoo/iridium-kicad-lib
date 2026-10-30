@@ -1,0 +1,93 @@
+{
+  "name": "Iridium_9704",
+  "description": "Iridium Certus 9704 L-band satellite transceiver module, 88-pin LGA",
+  "footprint_description": "Iridium Certus 9704 L-band satellite transceiver, https://www.iridium.com/products/iridium-certus-9704/, 88-pad LGA, 31.5x42.0mm",
+  "tags": "Iridium 9704 Certus satellite transceiver LGA",
+  "keywords": "Iridium Certus 9704 satellite transceiver RF module",
+  "datasheet": "https://www.iridium.com/products/iridium-certus-9704/",
+  "ki_fp_filters": "Iridium*9704*",
+  "uuid_namespace": "6f1c2a52-9704-4c3e-b5a1-3d1a0e7c9704",
+  "footprint": {
+    "pads": "pads.json",
+    "alignment_holes": [[-13.25, -10.0], [13.25, 6.0]],
+    "alignment_hole_radius": 0.8,
+    "via_pins": [2, 4, 45, 47, 61, 62, 63, 78, 79, 80],
+    "expect": {
+      "smd": 88,
+      "npth": 0,
+      "vias": 20
+    }
+  },
+  "symbol": {
+    "gnd": [
+      1, 2, 4, 8, 11, 14, 17, 18, 22, 25, 31, 32, 45, 47, 48, 60, 61, 62, 63, 64, 65, 66, 75, 76,
+      77, 78, 79, 80
+    ],
+    "nc": [
+      28, 29, 30, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 67, 68, 69, 70, 71, 72, 73, 74, 81,
+      82, 83, 84, 85, 86, 87, 88
+    ],
+    "power": {
+      "V_IO": {
+        "pins": [33],
+        "top_x": -7.62
+      },
+      "V_BAT_MAIN": {
+        "pins": [34, 35, 36],
+        "top_x": 0.0
+      },
+      "V_BAT_PA": {
+        "pins": [37, 38, 39, 40, 41, 42, 43, 44],
+        "top_x": 7.62
+      }
+    },
+    "signals": {
+      "3": ["GNSS_RF_OUT", "passive"],
+      "5": ["GNSS_RF_EN", "input"],
+      "6": ["ENABLE", "input"],
+      "7": ["BOOTED", "output"],
+      "9": ["UART_XCVR_TX", "output"],
+      "10": ["UART_XCVR_RX", "input"],
+      "12": ["WAKE_XCVR_OUT", "output"],
+      "13": ["WAKE_XCVR_IN", "input"],
+      "15": ["XMIT_GATE", "output"],
+      "16": ["SYNC_XCVR_OUT", "output"],
+      "19": ["SPI_COPI", "input"],
+      "20": ["SPI_CIPO", "output"],
+      "21": ["SPI_SCLK", "input"],
+      "23": ["SPI_CS0", "input"],
+      "24": ["SPI_CS1", "input"],
+      "26": ["RSVD_0", "bidirectional"],
+      "27": ["RSVD_1", "bidirectional"],
+      "46": ["XCVR_RF", "passive"]
+    },
+    "left_layout": [9, 10, null, 19, 20, 21, 23, 24, null, 6, 7, 13, 12, 15, 16, 5, null, 26, 27],
+    "right_layout": [46, null, 3],
+    "expect_pins": 88,
+    "expect_pin_entries": 52
+  },
+  "model": {
+    "kind": "vendor-step+label",
+    "vendor": {
+      "module_part": "IRDM_9704",
+      "can_part": "P5042-DP-011",
+      "can_size": [30.6, 41.1, 2.5],
+      "translate": [-15.75, 21.0, 0.05]
+    },
+    "pcb": {
+      "min": [-15.75, -21.0, 0.0],
+      "max": [15.75, 21.0, 1.35]
+    },
+    "label": {
+      "svg_matrix": [0.11336544, 0.08415391, 0.12969845, -0.17843548, -92.83972366, 44.27718702],
+      "svg_to_step_offset": [19.56, -23.73],
+      "z": 3.96,
+      "plate": {
+        "x": [-13.5, 13.5],
+        "y": [-19.0, 19.0],
+        "z": [3.85, 3.954],
+        "corner_r": 1.5
+      }
+    }
+  }
+}

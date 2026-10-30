@@ -607,7 +607,7 @@ def write_svg(paths, out):
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
-    third_party = os.path.join(os.path.dirname(here), "third_party")
+    third_party = os.path.join(os.path.dirname(os.path.dirname(here)), "third_party")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fonts", default=os.path.join(third_party, "fonts"))
     ap.add_argument("--assets", default=os.path.join(third_party, "logos"), help="directory holding the fetched logo SVGs")
