@@ -2,6 +2,7 @@ PYTHON ?= python3
 KICAD_CLI ?= kicad-cli
 OUT    ?= out
 THIRD_PARTY  ?= third_party
+export THIRD_PARTY
 
 LIB       := Iridium_Modules
 MODULES   ?= $(sort $(patsubst modules/%/module.json,%,$(wildcard modules/*/module.json)))
@@ -16,7 +17,10 @@ MODULE_ARGS := $(addprefix --module modules/,$(MODULES))
 
 FONTS_STAMP := $(THIRD_PARTY)/.fetched
 
-# Each module.mk adds its label and can targets to these and defines the rule for its STEP
+.DEFAULT_GOAL := all
+
+# Each module.mk adds its label and can targets to these, defines the rule for its STEP and
+# lists the files its footprint is built from
 LABELS :=
 CANS   :=
 include $(foreach m,$(MODULES),modules/$(m)/module.mk)
@@ -44,7 +48,7 @@ step: $(STEPS)
 package: $(ZIP)
 render: $(RENDERS)
 
-$(OUT)/$(LIB).pretty/Iridium_%.kicad_mod: tools/kicad.py modules/%/module.json modules/%/pads.json
+$(OUT)/$(LIB).pretty/Iridium_%.kicad_mod: tools/kicad.py modules/%/module.json
 	$(PYTHON) tools/kicad.py footprint --module modules/$* --out $@
 
 $(SYMBOL): tools/kicad.py $(foreach m,$(MODULES),modules/$(m)/module.json)

@@ -7,6 +7,8 @@ VENDOR_STEP_9704 := $(THIRD_PARTY)/vendor/RockBLOCK_9704-SMA-2A.step
 LABELS += $(LABEL_9704)
 CANS   += $(CAN_9704)
 
+$(OUT)/$(LIB).pretty/Iridium_9704.kicad_mod: $(M9704)/pads.json
+
 $(LABEL_9704): $(FONTS_STAMP) $(M9704)/label.py
 	@mkdir -p $(dir $@)
 	$(PYTHON) $(M9704)/label.py --fonts $(THIRD_PARTY)/fonts --assets $(THIRD_PARTY)/logos --out $@
