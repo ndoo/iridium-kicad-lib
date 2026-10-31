@@ -246,6 +246,44 @@
           "sha256": "4b913094725ee8e960ad6d7932c8ad0971223fcaa715d8f8550c68641931c7a9"
         }
       ]
+    },
+    {
+      "name": "kicad-wuerth-wa-smsi-m2-h6-footprint",
+      "kind": "raw",
+      "dest": "kicad/Mounting_Wuerth_WA-SMSI-M2_H6mm_9774060243.kicad_mod",
+      "license": "KiCad official footprint library (CC-BY-SA 4.0 with the library exception); fetched at build time, never committed; the pads of the 9603 Wuerth variant are copied from it",
+      "finals": [
+        {
+          "sha256": "d3bc2251e1590cb6808438ccd4ea7927597e6822b63f3e78508fbd7dbfc39642",
+          "label": "kicad-footprints 3d2b27e6",
+          "preferred": true
+        }
+      ],
+      "mirrors": [
+        {
+          "url": "https://gitlab.com/kicad/libraries/kicad-footprints/-/raw/3d2b27e687a44c97f02109afb2acfeebbc8dd75f/Mounting_Wuerth.pretty/Mounting_Wuerth_WA-SMSI-M2_H6mm_9774060243.kicad_mod",
+          "sha256": "d3bc2251e1590cb6808438ccd4ea7927597e6822b63f3e78508fbd7dbfc39642"
+        }
+      ]
+    },
+    {
+      "name": "kicad-ufl-step",
+      "kind": "raw",
+      "dest": "kicad/U.FL_Hirose_U.FL-R-SMT-1_Vertical.step",
+      "license": "KiCad official 3D model library (CC-BY-SA 4.0 with the library exception); fetched at build time, never committed; the 9603 model includes it on the module's underside",
+      "finals": [
+        {
+          "sha256": "bb861ac13b1fa3709690e81d82a64544b02d4420ea410f7334fc7a4b57f8e71a",
+          "label": "kicad-packages3D a0244fe3",
+          "preferred": true
+        }
+      ],
+      "mirrors": [
+        {
+          "url": "https://gitlab.com/kicad/libraries/kicad-packages3D/-/raw/a0244fe3442823dbb052ebc4820b4c2951e1742c/Connector_Coaxial.3dshapes/U.FL_Hirose_U.FL-R-SMT-1_Vertical.step",
+          "sha256": "bb861ac13b1fa3709690e81d82a64544b02d4420ea410f7334fc7a4b57f8e71a"
+        }
+      ]
     }
   ]
 }

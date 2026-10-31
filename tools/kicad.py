@@ -9,12 +9,13 @@ Each module lives in modules/<name>/ (module.json plus its pad file).
              AST50147-xx KLC pattern from the kicad-symbols library
 
 Usage:
-  python tools/kicad.py footprint --module modules/9704 --out Iridium_Modules.pretty/Iridium_9704.kicad_mod
+  python tools/kicad.py footprint --module modules/9704 [--variant NAME] --out Iridium_Modules.pretty/Iridium_9704.kicad_mod
   python tools/kicad.py symbol --module modules/9704 [--module ...] --out Iridium_Modules.kicad_sym
 """
 
 import argparse
 import json
+import math
 import os
 import re
 import uuid as _uuid
@@ -67,12 +68,16 @@ def upstream_path(name):
     return path
 
 
-def board_size(module):
-    """Width and height of the module's footprint as placed on the board."""
+def board_bounds(module):
+    """Corners of the module's footprint as placed on the board, relative to the footprint origin."""
+    if module["footprint"].get("kind") == "connector":
+        return module["footprint"]["envelope"]
     if "footprint" in module.get("reuse", {}):
-        return module["reuse"]["footprint"]["body"]
-    # The generator turns its pad data a quarter
-    return module["pad_data"]["mod_h"], module["pad_data"]["mod_w"]
+        width, height = module["reuse"]["footprint"]["body"]
+    else:
+        # The generator turns its pad data a quarter
+        width, height = module["pad_data"]["mod_h"], module["pad_data"]["mod_w"]
+    return [-width / 2, -height / 2], [width / 2, height / 2]
 
 
 def _write(path, content):
@@ -132,7 +137,7 @@ def _fp_sort_key(block):
 
     if kind == "pad":
         number = re.match(r'\t\(pad "([^"]*)"', block[0]).group(1)
-        return (2, int(number), nums("at"), nums("size"))
+        return (2, int(number) if number.isdigit() else -1, nums("at"), nums("size"))
     layer = _LAYER_ORDER.index(re.search(r'\(layer "([^"]+)"\)', text).group(1))
     if kind == "fp_text":
         return (1, layer, 0, nums("at"))
@@ -546,6 +551,284 @@ def generate_footprint(module):
     return "\n".join(_fp_sort(out)) + "\n"
 
 
+def footprint_name(module, variant=None):
+    return module["name"] + (f"_{variant}" if variant else "")
+
+
+def standoff_pads(spec, holes, _u):
+    """Return the pad blocks of the upstream standoff footprint, repeated at each hole.
+
+    The upstream solder ring is numbered "1", which would join connector pin 1, and a numbered pad
+    adds to the pin count that KiCad's footprint filter compares, so it is unnumbered. Its three small
+    circle pads lie inside the ring pad's own outline, so they are dropped; the ring is then one pad.
+    """
+    with open(upstream_path(spec["upstream"])) as f:
+        lines = f.read().rstrip("\n").split("\n")
+    blocks = []
+    for line in lines:
+        if line.startswith("\t(") and not line.startswith("\t\t"):
+            blocks.append([])
+        if blocks:
+            blocks[-1].append(line)
+    pads = ["\n".join(b) for b in blocks if _kind(b) == "pad" and not b[0].startswith('\t(pad "1" smd circle')]
+    if not pads:
+        raise SystemExit(f"{spec['upstream']}: no pads")
+    out = []
+    for h, (hx, hy) in enumerate(holes):
+        for i, pad in enumerate(pads):
+            pad = re.sub(r'(?m)^\t\t\(at (\S+) (\S+)\)',
+                         lambda m: f"\t\t(at {_n(float(m[1]) + hx)} {_n(float(m[2]) + hy)})", pad, count=1)
+            pad = re.sub(r'^\t\(pad "1"', '\t(pad ""', pad)
+            uid = f'(uuid "{_u(f"standoff:{h}:{i}")}")'
+            if "(uuid" in pad:
+                pad = re.sub(r'\(uuid "[^"]+"\)', uid, pad)
+            else:
+                pad = re.sub(r'\n\t\)$', f"\n\t\t{uid}\n\t)", pad)
+            out.extend(pad.split("\n"))
+    return out
+
+
+def generate_connector_footprint(module, variant=None):
+    """Build the .kicad_mod of a board-to-board connector whose module mounts on two standoffs.
+
+    The origin is the centre of the pad array, so a placement file reports the connector's
+    position. The module outline, mounting holes and keep-outs are drawn relative to it.
+    """
+    fp = module["footprint"]
+    spec = fp["variants"][variant] if variant else None
+    name = footprint_name(module, variant)
+    descr = spec["description"] if spec else module["footprint_description"]
+    tags = module["tags"] + (f" {spec['tags']}" if spec else "")
+    holes = fp["mounting_holes"]
+    (ex0, ey0), (ex1, ey1) = fp["envelope"]
+    (cx0, cy0), (cx1, cy1) = fp["courtyard"]
+    embedded = bool(spec and "upstream" in spec)
+    holes_drilled = spec is None
+    (bx0, by0), (bx1, by1) = fp["body"]
+
+    # KLC parameters, as in generate_footprint
+    fab_width, silk_width, crt_width, thickness = 0.1, 0.12, 0.05, 0.15
+    fab_chamfer = 1.0
+    layers_smd = '"F.Cu" "F.Mask" "F.Paste"'
+
+    out = []
+    # Each variant has its own ids
+    _u = _make_u(_uuid.uuid5(_uuid.UUID(module["uuid_namespace"]), name))
+
+    def w(line, indent=0):
+        out.append("\t" * indent + line)
+
+    def prop(prop_name, value, x, y, layer, hide=False, size=1.0):
+        w(f'(property "{prop_name}" "{value}"', 1)
+        w(f'(at {_n(x)} {_n(y)} 0)', 2)
+        w('(unlocked yes)', 2)
+        w(f'(layer "{layer}")', 2)
+        if hide:
+            w('(hide yes)', 2)
+        w(f'(uuid "{_u()}")', 2)
+        w('(effects', 2)
+        w('(font', 3)
+        w(f'(size {size} {size})', 4)
+        w(f'(thickness {thickness})', 4)
+        w(')', 3)
+        w(')', 2)
+        w(')', 1)
+
+    def line(x1, y1, x2, y2, layer, width):
+        w('(fp_line', 1)
+        w(f'(start {_n(x1, 3)} {_n(y1, 3)})', 2)
+        w(f'(end {_n(x2, 3)} {_n(y2, 3)})', 2)
+        w('(stroke', 2)
+        w(f'(width {width})', 3)
+        w('(type solid)', 3)
+        w(')', 2)
+        w(f'(layer "{layer}")', 2)
+        w(f'(uuid "{_u()}")', 2)
+        w(')', 1)
+
+    def rect(x0, y0, x1, y1, layer, width):
+        for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+            line(*a, *b, layer, width)
+
+    def text(value, x, y, layer, size):
+        w(f'(fp_text user "{value}"', 1)
+        w(f'(at {_n(x)} {_n(y)} 0)', 2)
+        w('(unlocked yes)', 2)
+        w(f'(layer "{layer}")', 2)
+        w(f'(uuid "{_u()}")', 2)
+        w('(effects', 2)
+        w('(font', 3)
+        w(f'(size {size} {size})', 4)
+        w(f'(thickness {thickness if size >= 1 else 0.1})', 4)
+        w(')', 3)
+        w(')', 2)
+        w(')', 1)
+
+    w(f'(footprint "{name}"')
+    w('(version 20260206)', 1)
+    w('(generator "pcbnew")', 1)
+    w('(generator_version "10.0")', 1)
+    w('(layer "F.Cu")', 1)
+    w(f'(descr "{descr}")', 1)
+    w(f'(tags "{tags}")', 1)
+
+    mid_x = (ex0 + ex1) / 2
+    prop("Reference", "REF**", (cx0 + cx1) / 2, cy0 - 1.0, "F.SilkS")
+    prop("Value", name, (cx0 + cx1) / 2, ey1 + 1.0, "F.Fab")
+    prop("Datasheet", "", 0, 0, "F.Fab", hide=True, size=1.27)
+    prop("Description", "", 0, 0, "F.Fab", hide=True, size=1.27)
+    w('(attr smd)', 1)
+    w('(duplicate_pad_numbers_are_jumpers no)', 1)
+
+    # Socket body outline with the pin 1 corner chamfered; pin 1 is on the +y row, at -x
+    verts = [(bx0, by0), (bx1, by0), (bx1, by1), (bx0 + fab_chamfer, by1), (bx0, by1 - fab_chamfer), (bx0, by0)]
+    for (x1, y1), (x2, y2) in zip(verts, verts[1:]):
+        line(x1, y1, x2, y2, "F.Fab", fab_width)
+    text("${REFERENCE}", (bx0 + bx1) / 2, 0, "F.Fab", 1.0)
+
+    # Samtec's recommended silkscreen is the connector outline; the long sides would cross the pads
+    for x in (bx0, bx1):
+        line(x, by0, x, by1, "F.SilkS", silk_width)
+    # The pin 1 marker is the one on the KiCad RF_Module ESP-12E footprint (0.48 x 0.336 mm), just
+    # outside pad 1 and pointing at it
+    p1 = min(module["pad_data"]["pads"], key=lambda p: p["pin"])
+    tip = p1["y"] + p1["h"] / 2 + 0.3
+    tri = [(p1["x"], tip), (p1["x"] - 0.24, tip + 0.336), (p1["x"] + 0.24, tip + 0.336), (p1["x"], tip)]
+    w('(fp_poly', 1)
+    w('(pts', 2)
+    w(' '.join(f'(xy {_n(x, 3)} {_n(y, 3)})' for x, y in tri), 3)
+    w(')', 2)
+    w('(stroke', 2)
+    w(f'(width {silk_width})', 3)
+    w('(type solid)', 3)
+    w(')', 2)
+    w('(fill yes)', 2)
+    w('(layer "F.SilkS")', 2)
+    w(f'(uuid "{_u()}")', 2)
+    w(')', 1)
+
+    # The courtyard covers the socket and, where hardware is drilled or soldered, a circle at each hole
+    # on the side of the board where the hardware sits
+    rect(cx0, cy0, cx1, cy1, "F.CrtYd", crt_width)
+    radii = spec if embedded else fp
+    front_radius = radii["courtyard_radius" if embedded else "hole_courtyard_radius"]
+    back_radius = radii["back_courtyard_radius" if embedded else "hole_back_courtyard_radius"]
+    for crt_layer, crt_radius in (("F.CrtYd", front_radius), ("B.CrtYd", back_radius)):
+        for hx, hy in holes:
+            w('(fp_circle', 1)
+            w(f'(center {_n(hx)} {_n(hy)})', 2)
+            w(f'(end {_n(hx + crt_radius)} {_n(hy)})', 2)
+            w('(stroke', 2)
+            w(f'(width {crt_width})', 3)
+            w('(type default)', 3)
+            w(')', 2)
+            w('(fill no)', 2)
+            w(f'(layer "{crt_layer}")', 2)
+            w(f'(uuid "{_u()}")', 2)
+            w(')', 1)
+
+    # The envelope is both the module's mechanical outline and the clearance limit, so it is on F.Fab and Dwgs.User.
+    # Drawings: height zones, RF connector and the standoff positions. Notes are all caps.
+    for layer in ("F.Fab", "Dwgs.User"):
+        rect(ex0, ey0, ex1, ey1, layer, fab_width)
+    zone = fp["height_zones"]
+    band_y = zone["connector_band_y"]
+    line(ex0, band_y, ex1, band_y, "Dwgs.User", fab_width)
+
+    def stack(lines, x, y, size):
+        """One text element with its anchor on the 1 mm grid; KiCad sets the line spacing."""
+        text("\\n".join(lines), round(x), round(y), "Dwgs.User", size)
+
+    rf = fp["rf_connector"]
+    cx, cy = rf["center"]
+    rect(cx - rf["size"][0] / 2, cy - rf["size"][1] / 2, cx + rf["size"][0] / 2, cy + rf["size"][1] / 2,
+         "Dwgs.User", fab_width)
+    band_mid = (band_y + ey1) / 2
+    stack([f"{zone['module']} MM CLEARANCE UNDER MODULE"], mid_x, (ey0 + band_y) / 2, 0.7)
+    stack([f"{zone['connector']} MM", "CLEARANCE"], (cx1 + ex1) / 2, band_mid, 0.6)
+    stack([f"{zone['rf']} MM", "CLEARANCE", "UNDER RF", "CONNECTOR/", "CABLE"],
+          (ex0 + cx - rf["size"][0] / 2) / 2, band_mid, 0.6)
+    for hx, hy in [] if embedded else holes:
+        w('(fp_circle', 1)
+        w(f'(center {_n(hx)} {_n(hy)})', 2)
+        w(f'(end {_n(hx + fp["keepout_diameter"] / 2)} {_n(hy)})', 2)
+        w('(stroke', 2)
+        w(f'(width {fab_width})', 3)
+        w('(type solid)', 3)
+        w(')', 2)
+        w('(fill no)', 2)
+        w('(layer "Dwgs.User")', 2)
+        w(f'(uuid "{_u()}")', 2)
+        w(')', 1)
+        line(hx - 3.2, hy, hx + 3.2, hy, "Dwgs.User", fab_width)
+        line(hx, hy - 3.2, hx, hy + 3.2, "Dwgs.User", fab_width)
+
+    if not embedded:
+        # One note for the hardware, midway between the holes. Each leader is a horizontal tail, then a
+        # 45 degree run to an arrow tip on the grid just outside the hole and clear of the crosshair arms
+        note = fp["hardware_note"]
+        size, tail = 0.7, 1.0
+        nx = round(sum(h[0] for h in holes) / len(holes))
+        ny = round(holes[0][1] + 2.5)
+        stack(note, nx, ny, size)
+        for hx, hy in holes:
+            side = 1 if hx < nx else -1
+            tip_x, tip_y = round(hx + side * 1.5), round(hy + 1.5)
+            x1 = tip_x + side * (ny - tip_y)
+            x0 = x1 + side * tail
+            if max(len(s) for s in note) * size * 0.99 / 2 + 0.3 > abs(x0 - nx):
+                raise SystemExit("hardware_note is too wide for its leaders")
+            line(x0, ny, x1, ny, "Dwgs.User", fab_width)
+            line(x1, ny, tip_x, tip_y, "Dwgs.User", fab_width)
+            ux, uy = -side * math.sqrt(0.5), -math.sqrt(0.5)
+            for sign in (-1, 1):
+                ang = math.radians(20) * sign
+                bx = -(ux * math.cos(ang) - uy * math.sin(ang)) * 0.7
+                by = -(ux * math.sin(ang) + uy * math.cos(ang)) * 0.7
+                line(tip_x, tip_y, tip_x + bx, tip_y + by, "Dwgs.User", fab_width)
+
+    for pad in module["pad_data"]["pads"]:
+        w(f'(pad "{pad["pin"]}" smd roundrect', 1)
+        w(f'(at {_n(pad["x"], 3)} {_n(pad["y"], 3)})', 2)
+        w(f'(size {_n(pad["w"], 3)} {_n(pad["h"], 3)})', 2)
+        w(f'(layers {layers_smd})', 2)
+        w('(roundrect_rratio 0.25)', 2)
+        w(f'(solder_paste_margin {fp["paste_margin"]})', 2)
+        w(f'(uuid "{_u(f"pad:{pad["pin"]}")}")', 2)
+        w(')', 1)
+
+    if embedded:
+        out.extend(standoff_pads(spec, holes, _u))
+    elif holes_drilled:
+        for h, (hx, hy) in enumerate(holes):
+            w('(pad "" np_thru_hole circle', 1)
+            w(f'(at {_n(hx)} {_n(hy)})', 2)
+            w(f'(size {fp["hole_drill"]} {fp["hole_drill"]})', 2)
+            w(f'(drill {fp["hole_drill"]})', 2)
+            w('(layers "*.Cu" "*.Mask")', 2)
+            w(f'(uuid "{_u(f"hole:{h}")}")', 2)
+            w(')', 1)
+
+    w('(embedded_fonts no)', 1)
+
+    def model(path):
+        w(f'(model "{path}"', 1)
+        w('(offset', 2)
+        w('(xyz 0 0 0)', 3)
+        w(')', 2)
+        w('(scale', 2)
+        w('(xyz 1 1 1)', 3)
+        w(')', 2)
+        w('(rotate', 2)
+        w('(xyz 0 0 0)', 3)
+        w(')', 2)
+        w(')', 1)
+
+    model(f"${{IRIDIUM_MODULES_3DMODEL_DIR}}/{LIB}.3dshapes/{name}.step")
+    w(')')
+    return "\n".join(_fp_sort(out)) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Symbol
 # ---------------------------------------------------------------------------
@@ -766,18 +1049,24 @@ def generate_symbols(modules):
     return "\n".join([header] + blocks + [")"]) + "\n"
 
 
-def main_footprint(module_path, out_path):
+def main_footprint(module_path, out_path, variant=None):
     module = load_module(module_path)
-    derived = "footprint" in module.get("reuse", {})
-    content = derive_footprint(module) if derived else generate_footprint(module)
+    if module["footprint"].get("kind") == "connector":
+        content = generate_connector_footprint(module, variant)
+    elif variant:
+        raise SystemExit(f"{module['name']}: footprint variants need footprint.kind connector")
+    elif "footprint" in module.get("reuse", {}):
+        content = derive_footprint(module)
+    else:
+        content = generate_footprint(module)
     _write(out_path, content)
     print(f"Footprint written to {out_path}")
 
-    expect = module["footprint"]["expect"]
+    expect = (module["footprint"]["variants"][variant] if variant else {}).get("expect") or module["footprint"]["expect"]
     counts = {
         "smd": len(re.findall(r'\(pad "[0-9]+" smd', content)),
         "npth": content.count("np_thru_hole"),
-        "vias": content.count("thru_hole circle"),
+        "vias": len(re.findall(r'\(pad "[^"]*" thru_hole circle', content)),
     }
     print(f"SMD pads:     {counts['smd']}  (expected {expect['smd']})")
     print(f"NPTH holes:   {counts['npth']}  (expected {expect['npth']})")
@@ -807,13 +1096,14 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     fp = sub.add_parser("footprint")
     fp.add_argument("--module", required=True)
+    fp.add_argument("--variant", help="footprint.variants key; omit for the default footprint")
     fp.add_argument("--out", required=True)
     sym = sub.add_parser("symbol")
     sym.add_argument("--module", action="append", required=True)
     sym.add_argument("--out", required=True)
     args = ap.parse_args()
     if args.cmd == "footprint":
-        main_footprint(args.module, args.out)
+        main_footprint(args.module, args.out, args.variant)
     else:
         main_symbol(args.module, args.out)
 

@@ -31,15 +31,27 @@ def main():
         module = load_module(path)
         name = module["name"]
 
-        footprint_path = os.path.join(args.lib, f"{LIB}.pretty", f"{name}.kicad_mod")
-        if not os.path.exists(footprint_path) or not os.path.getsize(footprint_path):
-            failures.append(f"missing or empty {footprint_path}")
-        else:
-            with open(footprint_path) as f:
-                pads = len(re.findall(r'\(pad "[0-9]+" smd', f.read()))
-            want = module["footprint"]["expect"]["smd"]
-            if pads != want:
-                failures.append(f"{name}: expected {want} numbered pads, got {pads}")
+        # A module's variants are footprints with their own models
+        names = [name] + [f"{name}_{v}" for v in module["footprint"].get("variants", {})]
+        for fp_name in names:
+            footprint_path = os.path.join(args.lib, f"{LIB}.pretty", f"{fp_name}.kicad_mod")
+            if not os.path.exists(footprint_path) or not os.path.getsize(footprint_path):
+                failures.append(f"missing or empty {footprint_path}")
+            else:
+                with open(footprint_path) as f:
+                    pads = len(re.findall(r'\(pad "[0-9]+" smd', f.read()))
+                want = module["footprint"]["expect"]["smd"]
+                if pads != want:
+                    failures.append(f"{fp_name}: expected {want} numbered pads, got {pads}")
+
+            step_path = os.path.join(args.lib, f"{LIB}.3dshapes", f"{fp_name}.step")
+            if os.path.exists(step_path):
+                if not os.path.getsize(step_path):
+                    failures.append(f"{fp_name}: empty {step_path}")
+            elif args.step:
+                failures.append(f"{fp_name}: missing {step_path}")
+            else:
+                print(f"{fp_name}: STEP not built, skipped")
 
         block = symbols.get(name)
         if block is None:
@@ -49,15 +61,6 @@ def main():
             want = module["symbol"]["expect_pin_entries"]
             if entries != want:
                 failures.append(f"{name}: expected {want} symbol pin entries, got {entries}")
-
-        step_path = os.path.join(args.lib, f"{LIB}.3dshapes", f"{name}.step")
-        if os.path.exists(step_path):
-            if not os.path.getsize(step_path):
-                failures.append(f"{name}: empty {step_path}")
-        elif args.step:
-            failures.append(f"{name}: missing {step_path}")
-        else:
-            print(f"{name}: STEP not built, skipped")
 
     if failures:
         sys.exit("\n".join(failures))

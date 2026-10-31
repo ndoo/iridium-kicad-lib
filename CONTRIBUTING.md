@@ -31,7 +31,7 @@ make render KICAD_CLI="$PWD/tools/kicad-cli-docker.sh"
 make klc KLC_DIR=/path/to/kicad-library-tools/library_utils
 ```
 
-`tools/klc_check.py` accepts two known errors (F7.4 on the stitching-via pads and F9.3 on the 3D model path variable) and fails on anything else.
+`tools/klc_check.py` accepts three known errors (F7.4 on the stitching-via pads, F9.3 on the 3D model path variable, and F6.2 on the connector-kind footprints, whose origin is the socket body centre while the module envelope on F.Fab is centred elsewhere) and fails on anything else.
 
 ## Commits
 

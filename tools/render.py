@@ -24,7 +24,7 @@ import uuid
 
 from PIL import Image, ImageChops
 
-from kicad import LIB, board_size, load_module
+from kicad import LIB, board_bounds, load_module
 
 BOARD_CENTRE = (60.0, 50.0)
 BOARD_MARGIN = 5.0
@@ -75,9 +75,7 @@ BOARD_HEADER = """(kicad_pcb
 def board_text(footprint_path, module):
     """A board with the footprint at BOARD_CENTRE inside a rectangular outline."""
     cx, cy = BOARD_CENTRE
-    width, height = board_size(module)
-    hw = width / 2 + BOARD_MARGIN
-    hh = height / 2 + BOARD_MARGIN
+    (x0, y0), (x1, y1) = board_bounds(module)
     outline_uuid = uuid.uuid5(uuid.UUID(module["uuid_namespace"]), "render:outline")
     with open(footprint_path) as f:
         lines = f.read().rstrip("\n").split("\n")
@@ -86,7 +84,8 @@ def board_text(footprint_path, module):
         placed.append(line)
         if line == '\t(layer "F.Cu")':
             placed.append(f"\t(at {cx} {cy})")
-    outline = (f'\t(gr_rect (start {cx - hw} {cy - hh}) (end {cx + hw} {cy + hh}) '
+    outline = (f'\t(gr_rect (start {cx + x0 - BOARD_MARGIN} {cy + y0 - BOARD_MARGIN}) '
+               f'(end {cx + x1 + BOARD_MARGIN} {cy + y1 + BOARD_MARGIN}) '
                f'(stroke (width 0.05) (type default)) (fill no) (layer "Edge.Cuts") '
                f'(uuid "{outline_uuid}"))')
     return BOARD_HEADER + "\n".join(placed).replace("\n(footprint", "\n\t(footprint", 1) + "\n" + outline + "\n)\n"

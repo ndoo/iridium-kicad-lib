@@ -137,7 +137,8 @@ def fetch_entry(entry, dest):
                 print(f"{name}: mirror failed: {ex}", file=sys.stderr)
                 continue
             os.makedirs(os.path.dirname(final), exist_ok=True)
-            part = final + ".part"
+            # Per process, so parallel make jobs fetching the same entry do not collide
+            part = f"{final}.{os.getpid()}.part"
             shutil.copyfile(src, part)
             os.replace(part, final)
         f = finals[got]
