@@ -855,9 +855,17 @@ class _Geometry:
         self.left_y = [(n_rows - 1) / 2.0 * SPACING - i * SPACING for i in range(n_rows)]
         # Room above and below for the power pin names
         self.body_top = self.left_y[0] + margin_rows * SPACING
-        self.body_bottom = self.left_y[-1] - margin_rows * SPACING
         # Right rows are top-aligned with the left side
         self.right_y = [self.left_y[0] - i * SPACING for i in range(len(right_layout))]
+        self.body_bottom = min(self.left_y[-1], self.right_y[-1]) - margin_rows * SPACING
+        # Centre the body on the origin; an odd shift in half rows would move the pins off the grid
+        if round(-(self.body_top + self.body_bottom) / SPACING) % 2:
+            self.body_bottom -= SPACING
+        shift = -(self.body_top + self.body_bottom) / 2.0
+        self.body_top += shift
+        self.body_bottom += shift
+        self.left_y = [y + shift for y in self.left_y]
+        self.right_y = [y + shift for y in self.right_y]
         self.top_y = self.body_top + SPACING
         self.bottom_y = self.body_bottom - SPACING
 
