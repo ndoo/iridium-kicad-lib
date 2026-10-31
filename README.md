@@ -4,6 +4,7 @@ Generators for a KiCad symbol, footprint and 3D model library of Iridium satelli
 
 | Module | Description | Package | Section |
 | --- | --- | --- | --- |
+| `Iridium_9603` | Iridium 9603 and 9603N short burst data transceiver | 2x10 Samtec SS4 socket, 29.6 x 31.5 mm module | [Iridium 9603](#iridium-9603) |
 | `Iridium_9604` | Iridium 9604 hybrid LTE-M, Iridium SBD and GNSS module | 96-pad LGA, 16.0 x 26.0 mm | [Iridium 9604](#iridium-9604) |
 | `Iridium_9704` | Iridium Certus 9704 L-band transceiver | 88-pad LGA, 31.5 x 42.0 mm | [Iridium 9704](#iridium-9704) |
 
@@ -55,8 +56,8 @@ Output layout:
 | Path | Contents |
 | --- | --- |
 | `out/Iridium_Modules.kicad_sym` | Symbol library, one symbol per module |
-| `out/Iridium_Modules.pretty/<name>.kicad_mod` | Footprint, one file per module |
-| `out/Iridium_Modules.3dshapes/<name>.step` | 3D model, one file per module |
+| `out/Iridium_Modules.pretty/<name>.kicad_mod` | Footprint, one file per module and footprint variant |
+| `out/Iridium_Modules.3dshapes/<name>.step` | 3D model, one file per footprint |
 | `out/build/<module>/` | Intermediates for a module's 3D model |
 | `out/Iridium_Modules-kicad-lib.zip` | `make package`: the three libraries and `INSTALL.txt` |
 | `out/render/<module>/` | `make render`: `render-top.png`, `render-bottom.png`, `render-angled.png`, `render-rotating.gif`, `render-footprint.png`, `render-symbol.png` |
@@ -69,8 +70,10 @@ Footprint UUIDs are derived from fixed keys, so rebuilds of footprints and symbo
 2. In `module.json`, list the pad geometry file, alignment holes, stitching via pads, the expected pad, via and pin counts, and the symbol's power, ground and signal pins and layout. `make check` and the generators fail if the built counts differ from the expected ones. `symbol.margin_rows` sets the room above and below the pin rows (default 4).
 3. To reuse instead of copy, add a `reuse` section. `"footprint": {"upstream": "<assets.lock entry>", "body": [width, height]}` derives the footprint from a fetched `.kicad_mod`: only its name, description, tags, Value text, 3D model path and ids change, so its pads, graphics and text are the upstream's own, and `body` is its size on the board. `"pads": {"module": "<other module>"}` draws the footprint from another module's pad data. `"model": {"upstream": "<assets.lock entry>"}` or `{"module": "<other module>"}` takes the 3D model. A module has exactly one of `footprint.pads`, `reuse.pads` and `reuse.footprint`.
 4. For a 3D model, add a `model` section and a `modules/<name>/module.mk` that adds any intermediate targets to `LABELS` and `CANS` and defines the rule for `$(OUT)/$(LIB).3dshapes/Iridium_<name>.step`. `modules/9704/module.mk` shows a model built from a vendor STEP and a generated label (kind `vendor-step+label`); `modules/9604/module.mk` shows a reused upstream STEP with an edited part (kind `step-edit`). A module with a fetched footprint also adds the fetch rule and makes its footprint depend on the fetched file.
-5. Add the module to the table above and give it a section below, using the same subheadings as the existing ones.
-6. Add any third-party inputs to `assets.lock`.
+5. A module that mounts on a board-to-board connector sets `footprint.kind` to `connector` (see `modules/9603/`). Its `pads.json` lists pads in KiCad footprint coordinates, with the origin on the connector, and `module.json` gives the connector body, the envelope, the mounting holes and the height zones. `footprint.variants` adds footprints named `<module>_<variant>`: a variant with `upstream` copies the pads of a fetched KiCad footprint to each hole, and the footprint without a variant only drills the holes. A variant's `expect` overrides the module's counts. The footprint of each variant needs a rule in `module.mk` that adds it to `FOOTPRINTS`, and a model of the same name in `STEPS`.
+6. A `model.kind` of `parametric` builds the STEP from boxes and cylinders listed in `model.parts` (`add` and `cut` shapes, a colour, and y as in the footprint). A part with `step` (an `assets.lock` entry) places a fetched STEP, turned `rotate_x` degrees about X and moved to `at`, keeping its colours. `model.default_parts` are added to the model of the footprint without a variant, `model.variants` adds parts to the model of one variant, and `tools/model.py parametric [--variant]` writes it.
+7. Add the module to the table above and give it a section below, using the same subheadings as the existing ones.
+8. Add any third-party inputs to `assets.lock`.
 
 ## Testing and CI
 
@@ -96,8 +99,48 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for running the same checks locally.
 | `timesbd` | 9704 | `times32.exe` from the SourceForge corefonts project, plus raw GitHub and CDN copies of the same file | Microsoft core fonts EULA: redistribution of the unmodified original only |
 | `kicad-ublox-sara-footprint` | 9604 | KiCad `kicad-footprints`, `RF_GSM.pretty/ublox_SARA_LGA-96.kicad_mod`, GitLab raw at commit `18227ee1` | CC-BY-SA 4.0 with the KiCad library exception; fetched, never committed; the 9604 footprint is derived from it |
 | `kicad-ublox-sara-step` | 9604 | KiCad `kicad-packages3D`, `RF_GSM.3dshapes/ublox_SARA_LGA-96.step`, GitLab raw at commit `8490a156` | Same licence; the 9604 model changes the height of its shield |
+| `kicad-ufl-step` | 9603 | KiCad `kicad-packages3D`, `Connector_Coaxial.3dshapes/U.FL_Hirose_U.FL-R-SMT-1_Vertical.step`, GitLab raw at commit `a0244fe3` | CC-BY-SA 4.0 with the KiCad library exception; fetched, never committed; placed in the 9603 models |
+| `kicad-wuerth-wa-smsi-m2-h6-footprint` | 9603 | KiCad `kicad-footprints`, `Mounting_Wuerth.pretty/Mounting_Wuerth_WA-SMSI-M2_H6mm_9774060243.kicad_mod`, GitLab raw at commit `3d2b27e6` | CC-BY-SA 4.0 with the KiCad library exception; fetched, never committed; the pads of the `Iridium_9603_WA-SMSI-M2` footprint are copied from it |
 
 The release zip contains content derived from these inputs; responsibility for distributing it rests with whoever publishes it. `FETCH_UA` sets the download User-Agent, and `FETCH_MIRROR_FIRST=<substring>` tries a matching mirror first. Every mirror must serve bytes matching its recorded sha256; `make verify` checks the fetched files and `python tools/fetch.py --check-mirrors` downloads and checks every mirror.
+
+## Iridium 9603
+
+The Iridium 9603 and 9603N short burst data transceiver: 31.5 x 29.6 x 8.1 mm, mated to a 2x10, 0.4 mm Samtec board-to-board socket, with a U.FL RF connector and two mounting holes. One symbol and footprint set covers both variants. Developers guide, revision 3.1: <https://cdn.rock7.com/docs/9603-Developers-guide.pdf>. Definition: `modules/9603/`.
+
+<table>
+  <tr>
+    <td colspan="6" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-angled.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-angled.png" alt="Angled view of the 3D model" width="800"></a></td>
+  </tr>
+  <tr>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-top.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-top.png" alt="Top view of the 3D model" width="280"></a><br><sub>Top</sub></td>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-bottom.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-bottom.png" alt="Bottom view of the 3D model" width="280"></a><br><sub>Bottom</sub></td>
+    <td colspan="2" width="33%" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-rotating.gif"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-rotating.gif" alt="Rotating view of the 3D model" width="280"></a><br><sub>Rotating</sub></td>
+  </tr>
+  <tr>
+    <td colspan="3" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-footprint.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-footprint.png" alt="Footprint" width="400"></a><br><sub><b>Footprint</b></sub></td>
+    <td colspan="3" align="center"><a href="https://ndoo.github.io/iridium-kicad-lib/9603/render-symbol.png"><img src="https://ndoo.github.io/iridium-kicad-lib/9603/render-symbol.png" alt="Symbol" width="400"></a><br><sub><b>Symbol</b></sub></td>
+  </tr>
+</table>
+
+The images are built from `main` by the workflow and published to GitHub Pages, so they are not committed.
+
+### Footprint
+
+The footprint is the host side of the module: the land pattern of the Samtec SS4-10-3.50-L-D-K-TR socket and the two mounting holes. Its origin is the centre of the socket body, so a position file reports where the socket is placed; the module is mated by hand. The guide's text names the -3.00 socket, but its drawings show 6.0 mm board to board, which is the -3.50 part. The pads follow [Samtec's recommended layout](https://suddendocs.samtec.com/prints/ss4-xx-x.xx-x-d-x-xx-tr-footprint.pdf) (revision K). The module envelope, height limits and standoff positions, (-14.80, -25.59) mm and (10.20, -25.59) mm, follow the guide's figures 2 to 4 and are drawn on `Dwgs.User`; the envelope is also on `F.Fab`. The 0.17 mm gap between pads is below KiCad's default 0.2 mm clearance, so set the board's minimum clearance to 0.17 mm or less.
+
+| Footprint | Mounting hardware |
+| --- | --- |
+| `Iridium_9603` | Two 3.73 mm NPTH for the guide's McMaster-Carr hardware, listed on `Dwgs.User`: 95117A411 press-in nut, 94669A100 spacer and 90272A080 screw. There is no pad, because the aluminium spacer does not take solder |
+| `Iridium_9603_WA-SMSI-M2` | Wuerth WA-SMSI-M2 H6mm 9774060243 SMT standoff pads at each hole, copied from the KiCad footprint. They are unnumbered, so the standoffs are soldered with the socket and take M2 screws |
+
+### Symbol
+
+Names, numbers and directions are from table 7 of the guide. The ground and `EXT_PWR` pins are native pin stacks, and the reserved pins 16 and 17 are hidden no-connect pins.
+
+### 3D model
+
+The model is generated from the dimensions in `modules/9603/module.json`: the module board, its shields, the socket and plug at the 6.0 mm board-to-board height, the KiCad `U.FL_Hirose_U.FL-R-SMT-1_Vertical` model, and the hardware of each footprint. The shields are boxes sized from the guide's views, not Iridium CAD. McMaster-Carr's terms do not allow redistributing its CAD, so the nut, spacer and screw are drawn from the dimensions it lists. The build rules are in `modules/9603/module.mk`.
 
 ## Iridium 9604
 

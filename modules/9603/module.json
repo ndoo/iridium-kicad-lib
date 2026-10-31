@@ -1,0 +1,198 @@
+{
+  "name": "Iridium_9603",
+  "description": "Iridium 9603 and 9603N short burst data transceiver, 2x10 0.4 mm Samtec board-to-board connector, centred on the host-side socket",
+  "footprint_description": "Iridium 9603 and 9603N SBD transceiver host footprint for Samtec SS4-10-3.50-L-D-K-TR, origin at the socket centre, McMaster-Carr 95117A411 standoffs, module 29.6x31.5mm, https://cdn.rock7.com/docs/9603-Developers-guide.pdf",
+  "tags": "Iridium 9603 9603N SBD satellite transceiver board-to-board Samtec SS4",
+  "keywords": "Iridium 9603 9603N SBD satellite transceiver RF module",
+  "datasheet": "https://cdn.rock7.com/docs/9603-Developers-guide.pdf",
+  "ki_fp_filters": "Iridium*9603*",
+  "uuid_namespace": "53cdc897-7e69-4b2e-918c-c473a2c1ff27",
+  "footprint": {
+    "kind": "connector",
+    "pads": "pads.json",
+    "body": [[-3.77, -2.175], [3.77, 2.175]],
+    "envelope": [[-17.6, -28.89], [13.4, 4.11]],
+    "courtyard": [[-4.02, -3.05], [4.02, 3.7]],
+    "mounting_holes": [[-14.8, -25.59], [10.2, -25.59]],
+    "hole_drill": 3.73,
+    "keepout_diameter": 5.25,
+    "hole_courtyard_radius": 2.63,
+    "hole_back_courtyard_radius": 3.04,
+    "rf_connector": {"center": [-7.99, 0.0], "size": [3.0, 2.6]},
+    "height_zones": {"module": 2.0, "connector": 5.5, "rf": 3.1, "connector_band_y": -2.25},
+    "variants": {
+      "WA-SMSI-M2": {
+        "description": "Iridium 9603 and 9603N SBD transceiver host footprint for Samtec SS4-10-3.50-L-D-K-TR, origin at the socket centre, with Wuerth WA-SMSI-M2 9774060243 SMT standoffs (6mm, M2 thread) at the mounting holes, module 29.6x31.5mm, https://cdn.rock7.com/docs/9603-Developers-guide.pdf",
+        "tags": "WA-SMSI M2 Wuerth 9774060243",
+        "upstream": "kicad-wuerth-wa-smsi-m2-h6-footprint",
+        "courtyard_radius": 2.9,
+        "back_courtyard_radius": 1.65
+      }
+    },
+    "expect": {"smd": 20, "npth": 2, "vias": 0},
+    "paste_margin": -0.015,
+    "hardware_note": ["MCMASTER-CARR P/NS:", "2X 95117A411 PRESS-IN NUT", "2X 94669A100 SPACER", "2X 90272A080 SCREW"]
+  },
+  "symbol": {
+    "gnd": [3, 4, 8, 15, 18],
+    "nc": [16, 17],
+    "power": {
+      "EXT_PWR": {"pins": [1, 2], "top_x": 0.0}
+    },
+    "signals": {
+      "5": ["ON/OFF", "input"],
+      "6": ["DF_S_TX", "input"],
+      "7": ["DF_S_RX", "output"],
+      "9": ["DF_DCD", "output"],
+      "10": ["DF_DSR", "output"],
+      "11": ["DF_CTS", "output"],
+      "12": ["DF_RI", "output"],
+      "13": ["DF_RTS", "input"],
+      "14": ["DF_DTR", "input"],
+      "19": ["NETWORK_AVAILABLE", "output"],
+      "20": ["SUPPLY_OUT", "output"]
+    },
+    "margin_rows": 3,
+    "left_layout": [6, 13, 14, null, 5],
+    "right_layout": [7, 11, 9, 10, 12, null, 19, 20],
+    "expect_pins": 20,
+    "expect_pin_entries": 15
+  },
+  "model": {
+    "kind": "parametric",
+    "parts": [
+      {
+        "name": "module PCB",
+        "color": [0.0784, 0.2, 0.1412],
+        "add": [
+          {"box": [-17.1, -28.09, 6.0, 12.5, 3.41, 7.6]}
+        ],
+        "cut": [
+          {"cylinder": [-14.8, -25.59, 5.0, 8.6, 1.13]},
+          {"cylinder": [10.2, -25.59, 5.0, 8.6, 1.13]}
+        ]
+      },
+      {
+        "name": "upper shield",
+        "color": [0.78, 0.78, 0.8],
+        "add": [
+          {"box": [-16.8, -22.29, 7.6, 12.2, -3.24, 10.5]}
+        ]
+      },
+      {
+        "name": "lower shield",
+        "color": [0.78, 0.78, 0.8],
+        "add": [
+          {"box": [-16.8, -22.29, 2.4, 12.2, -3.24, 6.0]}
+        ]
+      },
+      {
+        "name": "SS4 socket",
+        "color": [0.1, 0.1, 0.1],
+        "add": [
+          {"box": [-3.77, -2.175, 0.0, 3.77, 2.175, 4.0]}
+        ]
+      },
+      {
+        "name": "ST4 plug",
+        "color": [0.14, 0.14, 0.14],
+        "add": [
+          {"box": [-2.58, -1.85, 3.5, 3.0, 1.85, 6.0]}
+        ]
+      },
+      {"name": "U.FL receptacle", "step": "kicad-ufl-step", "at": [-7.99, 0.0, 6.0], "rotate_x": 180}
+    ],
+    "variants": {
+      "WA-SMSI-M2": {
+        "parts": [
+          {
+            "name": "standoff 1",
+            "color": [0.62, 0.64, 0.68],
+            "add": [
+              {"cylinder": [-14.8, -25.59, 0.0, 6.0, 2.175]},
+              {"cylinder": [-14.8, -25.59, -1.4, 0.0, 1.4]}
+            ],
+            "cut": [
+              {"cylinder": [-14.8, -25.59, -1.4, 5.785, 0.785]}
+            ]
+          },
+          {
+            "name": "standoff 2",
+            "color": [0.62, 0.64, 0.68],
+            "add": [
+              {"cylinder": [10.2, -25.59, 0.0, 6.0, 2.175]},
+              {"cylinder": [10.2, -25.59, -1.4, 0.0, 1.4]}
+            ],
+            "cut": [
+              {"cylinder": [10.2, -25.59, -1.4, 5.785, 0.785]}
+            ]
+          }
+        ]
+      }
+    },
+    "expect_bbox": {"min": [-17.582, -3.41, -3.525], "max": [12.982, 28.372, 10.5], "tolerance": 0.01},
+    "expect_variant_bbox": {
+      "WA-SMSI-M2": {"min": [-17.1, -3.41, -1.4], "max": [12.5, 28.09, 10.5], "tolerance": 0.01}
+    },
+    "default_parts": [
+      {
+        "name": "spacer 1",
+        "color": [0.78, 0.79, 0.8],
+        "add": [
+          {"cylinder": [-14.8, -25.59, 0.0, 6.0, 2.25]}
+        ],
+        "cut": [
+          {"cylinder": [-14.8, -25.59, 0.0, 6.0, 1.35]}
+        ]
+      },
+      {
+        "name": "press-in nut 1",
+        "color": [0.62, 0.64, 0.68],
+        "add": [
+          {"cylinder": [-14.8, -25.59, -3.124, -1.6, 2.782]},
+          {"cylinder": [-14.8, -25.59, -1.6, 0.051, 2.096]}
+        ],
+        "cut": [
+          {"cylinder": [-14.8, -25.59, -3.2, 0.2, 1.092]}
+        ]
+      },
+      {
+        "name": "screw 1",
+        "color": [0.72, 0.76, 0.8],
+        "add": [
+          {"cylinder": [-14.8, -25.59, -3.525, 7.6, 1.092]},
+          {"cylinder": [-14.8, -25.59, 7.6, 9.13, 2.121]}
+        ]
+      },
+      {
+        "name": "spacer 2",
+        "color": [0.78, 0.79, 0.8],
+        "add": [
+          {"cylinder": [10.2, -25.59, 0.0, 6.0, 2.25]}
+        ],
+        "cut": [
+          {"cylinder": [10.2, -25.59, 0.0, 6.0, 1.35]}
+        ]
+      },
+      {
+        "name": "press-in nut 2",
+        "color": [0.62, 0.64, 0.68],
+        "add": [
+          {"cylinder": [10.2, -25.59, -3.124, -1.6, 2.782]},
+          {"cylinder": [10.2, -25.59, -1.6, 0.051, 2.096]}
+        ],
+        "cut": [
+          {"cylinder": [10.2, -25.59, -3.2, 0.2, 1.092]}
+        ]
+      },
+      {
+        "name": "screw 2",
+        "color": [0.72, 0.76, 0.8],
+        "add": [
+          {"cylinder": [10.2, -25.59, -3.525, 7.6, 1.092]},
+          {"cylinder": [10.2, -25.59, 7.6, 9.13, 2.121]}
+        ]
+      }
+    ]
+  }
+}

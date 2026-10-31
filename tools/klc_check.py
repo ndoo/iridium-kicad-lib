@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from kicad import LIB, load_module
 
 
-def expected(rule, entry, module):
+def expected(rule, entry, module, stem):
     if rule == "F7.4":
         # The stitching vias have no mask layers, so they are tented
         extras = {f"Pad '{n}' missing layer '*.Mask'" for n in module["footprint"]["via_pins"]}
@@ -27,8 +27,21 @@ def expected(rule, entry, module):
                     f"3D model directory is different from footprint directory (found "
                     f"'${{IRIDIUM_MODULES_3DMODEL_DIR}}/{directory}', should be '{directory}')")
                 and set(entry.extras) == {
-                    f"3D model path: ${{IRIDIUM_MODULES_3DMODEL_DIR}}/{directory}/{module['name']}.step"})
+                    f"3D model path: ${{IRIDIUM_MODULES_3DMODEL_DIR}}/{directory}/{stem}.step"})
+    if rule == "F6.2":
+        # The origin is the socket body centre, and the module envelope on F.Fab is centred elsewhere
+        return (module["footprint"].get("kind") == "connector"
+                and entry.message == "Footprint anchor does not match calculated center of Pads or F.Fab")
     return False
+
+
+def module_of(stem, modules_dir):
+    """The module a footprint belongs to: the footprint name, or that name plus a variant suffix."""
+    for path in sorted(modules_dir.glob("*/module.json")):
+        module = load_module(str(path.parent))
+        if stem == module["name"] or stem.startswith(module["name"] + "_"):
+            return module
+    sys.exit(f"no module for footprint {stem}")
 
 
 def check_footprints(klc, files, modules_dir):
@@ -40,14 +53,14 @@ def check_footprints(klc, files, modules_dir):
     failures = 0
     for path in files:
         kicad_mod = KicadMod(str(path))
-        module = load_module(str(modules_dir / path.stem.removeprefix("Iridium_")))
+        module = module_of(path.stem, modules_dir)
         for name, mod in get_all_footprint_rules().items():
             rule = mod.Rule(kicad_mod, SimpleNamespace())
             rule.check()
             for entry in rule.logEntries:
                 if entry.severity != Severity.ERROR:
                     continue
-                if expected(name, entry, module):
+                if expected(name, entry, module, path.stem):
                     print(f"{path.name}: {name}: expected: {entry.message}")
                     continue
                 failures += 1

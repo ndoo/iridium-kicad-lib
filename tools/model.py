@@ -8,11 +8,15 @@
              rounded-rectangle label plate, and one face per filled label path.
   step-edit  write the STEP named by the module's reuse.model with the straight
              wall of one coloured part stretched along Z
+  parametric write a STEP of the coloured boxes and cylinders listed in the module's
+             model.parts, plus those of one model.variants entry; a part with "step" is
+             a fetched STEP placed at "at"
 
 Usage:
   python tools/model.py can --module modules/9704 --vendor VENDOR.step --out can.step
   python tools/model.py assemble --module modules/9704 --label LABEL.svg --can CAN.step --out OUT.step
   python tools/model.py step-edit --module modules/9604 [--lib out] --out OUT.step
+  python tools/model.py parametric --module modules/9603 [--variant NAME] --out OUT.step
 """
 
 import argparse
@@ -30,9 +34,10 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeSolid, BRepBuilderAPI_MakeWire, BRepBuilderAPI_Sewing,
     BRepBuilderAPI_Transform,
 )
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakePrism
 from OCP.Bnd import Bnd_Box
 from OCP.GProp import GProp_GProps
 from OCP.Geom import Geom_BezierCurve
@@ -52,7 +57,7 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS
 from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
-from OCP.gp import gp_Ax1, gp_Dir, gp_GTrsf, gp_Mat, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec, gp_XYZ
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_GTrsf, gp_Mat, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec, gp_XYZ
 
 from kicad import LIB, load_module, upstream_path
 
@@ -753,6 +758,99 @@ def main_step_edit(args):
         die("bbox does not match expect_bbox %s" % want)
 
 
+# ----------------------------------------------------------------------
+# Parametric boxes
+# ----------------------------------------------------------------------
+
+def make_shape(item):
+    """A box ([x0, y0, z0, x1, y1, z1]) or cylinder ([x, y, z0, z1, radius]) with y as in the footprint."""
+    if "box" in item:
+        x0, y0, z0, x1, y1, z1 = item["box"]
+        # Footprint y runs down the board, model y runs up
+        return BRepPrimAPI_MakeBox(gp_Pnt(x0, -y1, z0), gp_Pnt(x1, -y0, z1)).Shape()
+    x, y, z0, z1, radius = item["cylinder"]
+    return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, -y, z0), gp_Dir(0, 0, 1)), radius, z1 - z0).Shape()
+
+
+def make_part(part):
+    """The union of part.add minus the union of part.cut, as a bare solid so that its colour applies."""
+    shapes = [make_shape(item) for item in part["add"]]
+    shape = shapes[0]
+    for other in shapes[1:]:
+        shape = BRepAlgoAPI_Fuse(shape, other).Shape()
+    for item in part.get("cut", []):
+        shape = BRepAlgoAPI_Cut(shape, make_shape(item)).Shape()
+    solids = []
+    exp = TopExp_Explorer(shape, TopAbs_SOLID)
+    while exp.More():
+        solids.append(exp.Current())
+        exp.Next()
+    if len(solids) != 1:
+        die(f"part {part['name']!r} has {len(solids)} solids, expected 1")
+    return solids[0]
+
+
+def add_step_part(shape_tool, color_tool, part):
+    """Add a fetched STEP, turned about X and moved to part.at ([x, y, z], y as in the footprint).
+
+    The solid and the colour of each of its faces are kept.
+    """
+    faces, _ = read_colored_faces(upstream_path(part["step"]))
+    trsf = gp_Trsf()
+    trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), math.radians(part.get("rotate_x", 0)))
+    move = gp_Trsf()
+    x, y, z = part["at"]
+    move.SetTranslation(gp_Vec(x, -y, z))
+    trsf = move.Multiplied(trsf)
+    faces = [(TopoDS.Face_s(BRepBuilderAPI_Transform(face, trsf, True).Shape()), color) for face, color in faces]
+    solid, faces = sew_solid(faces)
+    root = shape_tool.AddShape(solid)
+    TDataStd_Name.Set_s(root, TCollection_ExtendedString(part["name"]))
+    for face, color in faces:
+        if color is not None:
+            color_tool.SetColor(shape_tool.AddSubShape(root, face), color, XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+
+def main_parametric(args):
+    spec = load_model_spec(args.module, "parametric")
+    parts, expect = list(spec["parts"]), spec["expect_bbox"]
+    if not args.variant:
+        parts += spec.get("default_parts", [])
+    else:
+        parts += spec["variants"][args.variant]["parts"]
+        expect = spec["expect_variant_bbox"][args.variant]
+    doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    for part in parts:
+        if "step" in part:
+            add_step_part(shape_tool, color_tool, part)
+            continue
+        label = shape_tool.AddShape(make_part(part))
+        TDataStd_Name.Set_s(label, TCollection_ExtendedString(part["name"]))
+        r, g, b = (srgb_to_linear(c) for c in part["color"])
+        color_tool.SetColor(label, Quantity_Color(r, g, b, Quantity_TOC_RGB), XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+    writer = STEPCAFControl_Writer()
+    writer.SetColorMode(True)
+    writer.SetNameMode(True)
+    Interface_Static.SetCVal_s("write.step.schema", "AP214")
+    writer.Transfer(doc, STEPControl_AsIs)
+    if writer.Write(args.out) != 1:
+        die(f"cannot write {args.out}")
+
+    check = STEPControl_Reader()
+    check.ReadFile(args.out)
+    check.TransferRoots()
+    box = Bnd_Box()
+    BRepBndLib.Add_s(check.OneShape(), box)
+    got = box.Get()
+    print("Wrote %s, bbox (%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f)" % (args.out, *got))
+    want = [*expect["min"], *expect["max"]]
+    if any(abs(a - b) > expect["tolerance"] for a, b in zip(got, want)):
+        die("bbox does not match expect_bbox %s" % want)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -765,6 +863,10 @@ def main():
     p.add_argument("--label", required=True, help="label SVG")
     p.add_argument("--can", required=True, help="shielding can STEP")
     p.add_argument("--out", required=True, help="output STEP")
+    p = sub.add_parser("parametric", help="write a STEP of coloured solids from model.parts")
+    p.add_argument("--module", required=True, help="module directory, e.g. modules/9603")
+    p.add_argument("--variant", help="model.variants key whose parts are added; without it, model.default_parts")
+    p.add_argument("--out", required=True, help="output STEP")
     p = sub.add_parser("step-edit", help="write the reused STEP with the stretched part")
     p.add_argument("--module", required=True, help="module directory, e.g. modules/9604")
     p.add_argument("--lib", default="out", help="built library directory, for reuse.model.module")
@@ -773,7 +875,8 @@ def main():
     # The STEP writer prints a statistics banner per transferred shape
     for printer in Message.DefaultMessenger_s().Printers():
         printer.SetTraceLevel(Message_Gravity.Message_Warning)
-    {"can": main_can, "assemble": main_assemble, "step-edit": main_step_edit}[args.cmd](args)
+    {"can": main_can, "assemble": main_assemble, "step-edit": main_step_edit,
+     "parametric": main_parametric}[args.cmd](args)
 
 
 if __name__ == "__main__":
