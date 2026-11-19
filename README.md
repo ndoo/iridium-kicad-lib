@@ -140,7 +140,7 @@ Names, numbers and directions are from table 7 of the guide. The ground and `EXT
 
 ### 3D model
 
-The model is generated from the dimensions in `modules/9603/module.json`: the module board, its shields, the socket and plug at the 6.0 mm board-to-board height, the KiCad `U.FL_Hirose_U.FL-R-SMT-1_Vertical` model, and the hardware of each footprint. The shields are boxes sized from the guide's views, not Iridium CAD. McMaster-Carr's terms do not allow redistributing its CAD, so the nut, spacer and screw are drawn from the dimensions it lists. The build rules are in `modules/9603/module.mk`.
+The model is generated from `modules/9603/module.json`: the module board and shields, the socket and plug at the 6.0 mm board-to-board height with their pin tails, the KiCad `U.FL_Hirose_U.FL-R-SMT-1_Vertical` model, and the hardware of each footprint. The board and shields are `modules/9603/base.step`, geometry drawn for this library and moved into the footprint's frame (turned 180 degrees about Z, board underside at 6.0 mm) by `tools/model.py register`. The socket and plug are boxes whose dimensions were measured from Samtec's SS4-10-3.50-L-D-K-FR and ST4-10-2.50-L-D-P-TR 3D models, which this repository does not include, and the gold pin tails are boxes on the pad positions. The ST4-10-2.50 is the plug the guide names for the module, and with the SS4-3.50 it gives the 6.0 mm board-to-board height in Samtec's stack height table. McMaster-Carr's terms do not allow redistributing its CAD, so the nut, spacer and screw are drawn from the dimensions it lists. The build rules are in `modules/9603/module.mk`.
 
 ## Iridium 9604
 
