@@ -10,13 +10,17 @@
              wall of one coloured part stretched along Z
   parametric write a STEP of the coloured boxes and cylinders listed in the module's
              model.parts, plus those of one model.variants entry; a part with "step" is
-             a fetched STEP placed at "at"
+             a fetched STEP placed at "at", a part with "file" is a STEP in the module
+             directory whose named, coloured solids are copied unchanged
+  register   write the module's model.base.file from a source STEP in another frame:
+             a turn about Z and a translation, with each solid named and coloured
 
 Usage:
   python tools/model.py can --module modules/9704 --vendor VENDOR.step --out can.step
   python tools/model.py assemble --module modules/9704 --label LABEL.svg --can CAN.step --out OUT.step
   python tools/model.py step-edit --module modules/9604 [--lib out] --out OUT.step
   python tools/model.py parametric --module modules/9603 [--variant NAME] --out OUT.step
+  python tools/model.py register --module modules/9603 --source SOURCE.step --out modules/9603/base.step
 """
 
 import argparse
@@ -27,6 +31,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
+from OCP.BRep import BRep_Builder
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepBuilderAPI import (
@@ -55,8 +60,8 @@ from OCP.TDocStd import TDocStd_Document
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS
-from OCP.XCAFDoc import XCAFDoc_ColorType, XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
+from OCP.TopoDS import TopoDS, TopoDS_Compound
+from OCP.XCAFDoc import XCAFDoc_ColorTool, XCAFDoc_ColorType, XCAFDoc_DocumentTool, XCAFDoc_ShapeTool
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Dir, gp_GTrsf, gp_Mat, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec, gp_XYZ
 
 from kicad import LIB, load_module, upstream_path
@@ -762,32 +767,50 @@ def main_step_edit(args):
 # Parametric boxes
 # ----------------------------------------------------------------------
 
-def make_shape(item):
-    """A box ([x0, y0, z0, x1, y1, z1]) or cylinder ([x, y, z0, z1, radius]) with y as in the footprint."""
+def make_shape(item, module_dir):
+    """A box ([x0, y0, z0, x1, y1, z1]), cylinder ([x, y, z0, z1, radius]) or pad_boxes, with y as in the footprint.
+
+    pad_boxes puts one box on each pad of the module's pads.json: x is the pad centre +- half_width,
+    y runs from the row centre line out by y[0]..y[1] on the side of the pad, z is z[0]..z[1].
+    """
     if "box" in item:
         x0, y0, z0, x1, y1, z1 = item["box"]
         # Footprint y runs down the board, model y runs up
         return BRepPrimAPI_MakeBox(gp_Pnt(x0, -y1, z0), gp_Pnt(x1, -y0, z1)).Shape()
+    if "pad_boxes" in item:
+        spec = item["pad_boxes"]
+        with open(os.path.join(module_dir, "pads.json")) as f:
+            pads = json.load(f)["pads"]
+        compound = TopoDS_Compound()
+        BRep_Builder().MakeCompound(compound)
+        for pad in pads:
+            sign = 1 if pad["y"] > 0 else -1
+            y0, y1 = sorted((sign * spec["y"][0], sign * spec["y"][1]))
+            BRep_Builder().Add(compound, make_shape(
+                {"box": [pad["x"] - spec["half_width"], y0, spec["z"][0], pad["x"] + spec["half_width"], y1, spec["z"][1]]},
+                module_dir))
+        return compound
     x, y, z0, z1, radius = item["cylinder"]
     return BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(x, -y, z0), gp_Dir(0, 0, 1)), radius, z1 - z0).Shape()
 
 
-def make_part(part):
-    """The union of part.add minus the union of part.cut, as a bare solid so that its colour applies."""
-    shapes = [make_shape(item) for item in part["add"]]
+def make_part(part, module_dir):
+    """The solids of the union of part.add minus the union of part.cut; there are part.solids of them (default 1)."""
+    shapes = [make_shape(item, module_dir) for item in part["add"]]
     shape = shapes[0]
     for other in shapes[1:]:
         shape = BRepAlgoAPI_Fuse(shape, other).Shape()
     for item in part.get("cut", []):
-        shape = BRepAlgoAPI_Cut(shape, make_shape(item)).Shape()
+        shape = BRepAlgoAPI_Cut(shape, make_shape(item, module_dir)).Shape()
     solids = []
     exp = TopExp_Explorer(shape, TopAbs_SOLID)
     while exp.More():
         solids.append(exp.Current())
         exp.Next()
-    if len(solids) != 1:
-        die(f"part {part['name']!r} has {len(solids)} solids, expected 1")
-    return solids[0]
+    want = part.get("solids", 1)
+    if len(solids) != want:
+        die(f"part {part['name']!r} has {len(solids)} solids, expected {want}")
+    return solids
 
 
 def add_step_part(shape_tool, color_tool, part):
@@ -811,6 +834,96 @@ def add_step_part(shape_tool, color_tool, part):
             color_tool.SetColor(shape_tool.AddSubShape(root, face), color, XCAFDoc_ColorType.XCAFDoc_ColorSurf)
 
 
+def add_solid(shape_tool, color_tool, name, solid, color):
+    """Add a solid named `name`; `color` is a Quantity_Color."""
+    label = shape_tool.AddShape(solid)
+    TDataStd_Name.Set_s(label, TCollection_ExtendedString(name))
+    color_tool.SetColor(label, color, XCAFDoc_ColorType.XCAFDoc_ColorSurf)
+
+
+def srgb_color(rgb):
+    r, g, b = (srgb_to_linear(c) for c in rgb)
+    return Quantity_Color(r, g, b, Quantity_TOC_RGB)
+
+
+def read_solids(path):
+    """Return the solids of a STEP in file order."""
+    reader = STEPControl_Reader()
+    if reader.ReadFile(path) != 1:
+        die(f"cannot read {path}")
+    reader.TransferRoots()
+    solids = []
+    exp = TopExp_Explorer(reader.OneShape(), TopAbs_SOLID)
+    while exp.More():
+        solids.append(TopoDS.Solid_s(exp.Current()))
+        exp.Next()
+    return solids
+
+
+def main_register(args):
+    """Write the module's base STEP: the source solids moved into the library frame, named and coloured."""
+    spec = load_model_spec(args.module, "parametric")["base"]
+    solids = read_solids(args.source)
+    bodies = spec["bodies"]
+    if len(solids) != len(bodies):
+        die(f"{args.source} has {len(solids)} solids, model.base.bodies lists {len(bodies)}")
+    rot = gp_Trsf()
+    rot.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), math.radians(spec["rotate_z"]))
+    move = gp_Trsf()
+    move.SetTranslation(gp_Vec(*spec["translate"]))
+    trsf = move.Multiplied(rot)
+    doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    color_tool = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    for solid, body in zip(solids, bodies):
+        moved = TopoDS.Solid_s(BRepBuilderAPI_Transform(solid, trsf, True).Shape())
+        add_solid(shape_tool, color_tool, body["name"], moved, srgb_color(body["color"]))
+    write_doc(doc, args.out, spec["expect_bbox"])
+
+
+def add_file_part(shape_tool, color_tool, module_dir, part):
+    """Add every named, coloured solid of part.file (relative to the module directory) unchanged."""
+    path = os.path.join(module_dir, part["file"])
+    doc = TDocStd_Document(TCollection_ExtendedString("STEP"))
+    reader = STEPCAFControl_Reader()
+    reader.SetColorMode(True)
+    reader.SetNameMode(True)
+    if reader.ReadFile(path) != 1 or not reader.Transfer(doc):
+        die(f"cannot read {path}")
+    src_shapes = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    src_colors = XCAFDoc_DocumentTool.ColorTool_s(doc.Main())
+    roots = TDF_LabelSequence()
+    src_shapes.GetFreeShapes(roots)
+    for i in range(1, roots.Length() + 1):
+        label = roots.Value(i)
+        shape = src_shapes.GetShape_s(label)
+        color = Quantity_Color()
+        if not (XCAFDoc_ColorTool.GetColor_s(label, color) or src_colors.GetColor(shape, XCAFDoc_ColorType.XCAFDoc_ColorSurf, color)):
+            die(f"{path}: solid {label_name(label)!r} has no colour")
+        add_solid(shape_tool, color_tool, label_name(label), shape, color)
+
+
+def write_doc(doc, out, expect):
+    writer = STEPCAFControl_Writer()
+    writer.SetColorMode(True)
+    writer.SetNameMode(True)
+    Interface_Static.SetCVal_s("write.step.schema", "AP214")
+    writer.Transfer(doc, STEPControl_AsIs)
+    if writer.Write(out) != 1:
+        die(f"cannot write {out}")
+
+    check = STEPControl_Reader()
+    check.ReadFile(out)
+    check.TransferRoots()
+    box = Bnd_Box()
+    BRepBndLib.Add_s(check.OneShape(), box)
+    got = box.Get()
+    print("Wrote %s, bbox (%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f)" % (out, *got))
+    want = [*expect["min"], *expect["max"]]
+    if any(abs(a - b) > expect["tolerance"] for a, b in zip(got, want)):
+        die("bbox does not match expect_bbox %s" % want)
+
+
 def main_parametric(args):
     spec = load_model_spec(args.module, "parametric")
     parts, expect = list(spec["parts"]), spec["expect_bbox"]
@@ -825,30 +938,12 @@ def main_parametric(args):
     for part in parts:
         if "step" in part:
             add_step_part(shape_tool, color_tool, part)
-            continue
-        label = shape_tool.AddShape(make_part(part))
-        TDataStd_Name.Set_s(label, TCollection_ExtendedString(part["name"]))
-        r, g, b = (srgb_to_linear(c) for c in part["color"])
-        color_tool.SetColor(label, Quantity_Color(r, g, b, Quantity_TOC_RGB), XCAFDoc_ColorType.XCAFDoc_ColorSurf)
-
-    writer = STEPCAFControl_Writer()
-    writer.SetColorMode(True)
-    writer.SetNameMode(True)
-    Interface_Static.SetCVal_s("write.step.schema", "AP214")
-    writer.Transfer(doc, STEPControl_AsIs)
-    if writer.Write(args.out) != 1:
-        die(f"cannot write {args.out}")
-
-    check = STEPControl_Reader()
-    check.ReadFile(args.out)
-    check.TransferRoots()
-    box = Bnd_Box()
-    BRepBndLib.Add_s(check.OneShape(), box)
-    got = box.Get()
-    print("Wrote %s, bbox (%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f)" % (args.out, *got))
-    want = [*expect["min"], *expect["max"]]
-    if any(abs(a - b) > expect["tolerance"] for a, b in zip(got, want)):
-        die("bbox does not match expect_bbox %s" % want)
+        elif "file" in part:
+            add_file_part(shape_tool, color_tool, args.module, part)
+        else:
+            for solid in make_part(part, args.module):
+                add_solid(shape_tool, color_tool, part["name"], solid, srgb_color(part["color"]))
+    write_doc(doc, args.out, expect)
 
 
 def main():
@@ -867,6 +962,10 @@ def main():
     p.add_argument("--module", required=True, help="module directory, e.g. modules/9603")
     p.add_argument("--variant", help="model.variants key whose parts are added; without it, model.default_parts")
     p.add_argument("--out", required=True, help="output STEP")
+    p = sub.add_parser("register", help="write the module's base STEP from a source STEP in another frame")
+    p.add_argument("--module", required=True, help="module directory, e.g. modules/9603")
+    p.add_argument("--source", required=True, help="source STEP")
+    p.add_argument("--out", required=True, help="output STEP, normally the module's model.base.file")
     p = sub.add_parser("step-edit", help="write the reused STEP with the stretched part")
     p.add_argument("--module", required=True, help="module directory, e.g. modules/9604")
     p.add_argument("--lib", default="out", help="built library directory, for reuse.model.module")
@@ -876,7 +975,7 @@ def main():
     for printer in Message.DefaultMessenger_s().Printers():
         printer.SetTraceLevel(Message_Gravity.Message_Warning)
     {"can": main_can, "assemble": main_assemble, "step-edit": main_step_edit,
-     "parametric": main_parametric}[args.cmd](args)
+     "parametric": main_parametric, "register": main_register}[args.cmd](args)
 
 
 if __name__ == "__main__":
